@@ -1,0 +1,79 @@
+# wrangler.toml — Cloudflare Workers 部署配置
+# 本地开发：npx wrangler dev（模拟 D1/KV/R2/Queues；DO 需 miniflare 支持，0.8 起默认可用）
+
+name = "earth-soc-sim"
+main = "build/worker/shim.mjs"
+compatibility_date = "2026-10-01"
+
+# wasm-bindgen 必须带 --reference-types（否则 catch wrapper 生成失败），
+# 由 scripts/wasm-bindgen-reftypes.sh 包装后经 WASM_BINDGEN_BIN 注入。
+# 前提：PATH 里能找到 cargo/worker-build/wasm-bindgen 与 node。
+[build]
+command = "WASM_BINDGEN_BIN=scripts/wasm-bindgen-reftypes.sh worker-build --release"
+
+# ---- 变量 ----
+[vars]
+# 本体当前版本；ontology_admin.publish_version 会同步写 KV ontology:version，此处仅启动兜底
+ONTOLOGY_VERSION = "1.0.0"
+# L3 本体引擎（open-ontologies）地址；留空则 L3 校验降级为本地 SHACL 结果
+ONTOLOGY_ENGINE_URL = ""
+# LLM 网关（外部 API）；留空则 llm::gateway::propose 拒绝调用（禁默认 BYOK）
+LLM_API_URL = ""
+# 手动微信收款码图片 URL；留空时 /api/payment/order 直接 500（fail loud，不给用户一个坏二维码）
+MANUAL_WECHAT_QR_URL = ""
+
+# ---- D1：结构化状态 / 订单 / 积分 ----
+[[d1_databases]]
+binding = "DB"
+database_name = "earth-soc-sim-db"
+# database_id 由 `npx wrangler d1 create earth-soc-sim-db` 生成后回填；本地开发可留占位
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+# ---- KV：热状态 / 配额 / 缓存 / 版本 ----
+[[kv_namespaces]]
+binding = "KV"
+id = "0000000000000000000000000000000000000000000000000000000000000000"
+
+# ---- R2：事件日志 / LLM 记录 / 地图瓦片 / 本体版本 ----
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "earth-soc-sim"
+
+# ---- Queues：Agent 任务总线 ----
+[[queues.producers]]
+binding = "AGENT_TASKS"
+queue = "earth-soc-sim-agent-tasks"
+
+[[queues.consumers]]
+queue = "earth-soc-sim-agent-tasks"
+max_batch_size = 100
+max_batch_timeout = 30
+
+# ---- Durable Objects：WebSocket / 状态协调 ----
+[[durable_objects.bindings]]
+name = "DO_STATE"
+class_name = "AgentStateDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["AgentStateDO"]
+
+# ---- Cron：每 5 分钟一个社会 tick ----
+[triggers]
+crons = ["*/5 * * * *"]
+
+# ---- 沙箱绑定（governance::sandbox 专用，禁止指向生产库）----
+[[d1_databases]]
+binding = "DB_SANDBOX"
+database_name = "earth-soc-sim-sandbox-db"
+database_id = "00000000-0000-0000-0000-000000000001"
+migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "KV_SANDBOX"
+id = "0000000000000000000000000000000000000000000000000000000000000001"
+
+[[r2_buckets]]
+binding = "R2_SANDBOX"
+bucket_name = "earth-soc-sim-sandbox"

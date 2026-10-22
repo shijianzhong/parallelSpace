@@ -1,0 +1,23 @@
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix soc:  <http://soc.example/ontology#> .
+@prefix econ: <http://soc.example/econ/ontology#> .
+@prefix sht:  <http://soc.example/shacl/txn#> .
+
+sht:TransactionShape a sh:NodeShape ;
+    sh:targetClass econ:Transaction ;
+    sh:property [
+        sh:path econ:amount ;
+        sh:minCount 1 ;
+        sh:datatype xsd:decimal ;
+        sh:minInclusive 0 ;
+    ] ;
+    sh:property [
+        sh:path soc:partyTo ;
+        sh:minCount 2 ;
+        sh:class soc:Agent ;
+    ] ;
+    sh:property [
+        sh:path soc:underOntologyVersion ;
+        sh:minCount 1 ;
+    ] .

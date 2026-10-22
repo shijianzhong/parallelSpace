@@ -1,0 +1,36 @@
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix soc:  <http://soc.example/ontology#> .
+@prefix gov:  <http://soc.example/gov/ontology#> .
+@prefix shg:  <http://soc.example/shacl/gov#> .
+
+shg:CharterShape a sh:NodeShape ;
+    sh:targetClass gov:OrganizationCharter ;
+    sh:property [
+        sh:path gov:definesPosition ;
+        sh:minCount 1 ;
+        sh:class soc:Position ;
+    ] ;
+    sh:property [
+        sh:path gov:hasCharter ;
+        sh:maxCount 0 ;
+        sh:message "章程不应自己挂 hasCharter" ;
+    ] ;
+    sh:property [
+        sh:path <http://soc.example/gov/ontology#decisionMethod> ;
+        sh:minCount 1 ;
+        sh:in ( "appointment" "election" "consensus" ) ;
+    ] .
+
+shg:TransactionShape a sh:NodeShape ;
+    sh:targetClass <http://soc.example/econ/ontology#Transaction> ;
+    sh:property [
+        sh:path soc:affected ;
+        sh:minCount 1 ;
+    ] ;
+    sh:property [
+        sh:path <http://soc.example/econ/ontology#amount> ;
+        sh:minCount 1 ;
+        sh:datatype xsd:decimal ;
+        sh:minInclusive 0 ;
+    ] .

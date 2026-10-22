@@ -1,0 +1,43 @@
+[package]
+name = "earth-soc-sim"
+version = "0.1.0"
+edition = "2021"
+description = "Earth Soc Sim — OWL 本体驱动的多智能体社会模拟（Cloudflare Workers + workers-rs）"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# Worker 框架（0.8.7；event 宏 / Router / D1 / Queues 绑定）
+worker = { version = "0.8", features = ["d1", "queue"] }
+# 序列化：JSON 仅用于 API 传输与前端交换，不用 JSON Schema 约束本体
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 错误：thiserror 定义 AppError，映射 HTTP 状态码
+thiserror = "2"
+# 时间统一 UTC；社会时间用 tick: u64。wasmbind：wasm 下 Utc::now() 走 js_sys::Date，
+# 否则 chrono 回退 SystemTime，在 wasm32-unknown-unknown 上直接 panic
+chrono = { version = "0.4", features = ["serde", "wasmbind"] }
+# 事件 ID
+ulid = "3"
+# 异步 trait（PaymentProvider 等）
+async-trait = "0.1"
+# L2 轻量推理：OWL 2 RL（reasonable）；L3 完整推理走外部 open-ontologies HTTP 服务
+reasonable = "0.4"
+# RDF 模型与 Turtle 解析（SHACL 形状 / 行动 RDF 负载）
+oxrdf = "0.3"
+rio_turtle = "0.7"
+rio_api = "0.7"
+# wasm32-unknown-unknown 下 rand 链的 getrandom 默认不支持，必须显式开 wasm_js
+# （ulid→rand0.10→getrandom0.4，oxrdf→rand0.9→getrandom0.3，两条链都要）
+getrandom = { version = "0.4", features = ["wasm_js"] }
+getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+
+[dev-dependencies]
+# wasm 单测：cargo test --target wasm32-unknown-unknown（runner 见 .cargo/config.toml）
+wasm-bindgen-test = "0.3"
+
+[profile.release]
+opt-level = "s"
+strip = true

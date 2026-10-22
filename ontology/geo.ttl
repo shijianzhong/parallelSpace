@@ -1,0 +1,17 @@
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix geo:  <http://www.opengis.net/ont/geosparql#> .
+@prefix soc:  <http://soc.example/ontology#> .
+@prefix sge:  <http://soc.example/geo/ontology#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+<http://soc.example/geo/v1>
+    a owl:Ontology ;
+    owl:versionIRI <http://soc.example/geo/v1> ;
+    rdfs:comment "地理本体 v1.0，复用 GeoSPARQL" ;
+    owl:imports <http://www.opengis.net/ont/geosparql> .
+
+sge:hasWKT a owl:DatatypeProperty ;
+    rdfs:domain soc:Location ;
+    rdfs:range xsd:string ;
+    rdfs:comment "地点 WKT 表达，MapLibre 消费" .

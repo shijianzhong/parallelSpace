@@ -1,0 +1,16 @@
+# wasm 构建/测试的共享配置。
+#
+# 1) runner：`cargo test --target wasm32-unknown-unknown` 走 node 驱动的
+#    wasm-bindgen-test-runner（不需要浏览器/chromedriver）。
+#    安装：cargo install wasm-bindgen-cli --version <Cargo.lock 里 wasm-bindgen 的版本> --locked
+#
+# 2) rustflags：必须显式打开 reference-types。
+#    Rust 1.82 起 wasm32-unknown-unknown 默认不再启用该 target feature，
+#    而 worker-build 调 wasm-bindgen 时带 --force-enable-abort-handler 会生成
+#    catch wrapper，需要 externref 表；缺了它直接报：
+#      error: failed to generate catch wrappers
+#      caused by: externref table required for catch wrappers
+#    Cloudflare Workers（V8）支持 reference-types，打开无副作用。
+[target.wasm32-unknown-unknown]
+runner = "wasm-bindgen-test-runner"
+rustflags = ["-C", "target-feature=+reference-types"]

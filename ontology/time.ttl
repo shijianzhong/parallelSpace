@@ -1,0 +1,21 @@
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix time: <http://www.w3.org/2006/time#> .
+@prefix soc:  <http://soc.example/ontology#> .
+@prefix ste:  <http://soc.example/time/ontology#> .
+
+<http://soc.example/time/v1>
+    a owl:Ontology ;
+    owl:versionIRI <http://soc.example/time/v1> ;
+    rdfs:comment "时间本体 v1.0，复用 OWL-Time" ;
+    owl:imports <http://www.w3.org/2006/time> .
+
+ste:socialTick a owl:DatatypeProperty ;
+    rdfs:domain soc:Event ;
+    rdfs:range xsd:unsignedLong ;
+    rdfs:comment "社会 tick，与 UTC 时间并列" .
+
+ste:hasTime a owl:ObjectProperty ;
+    rdfs:domain soc:Event ;
+    rdfs:range time:TemporalEntity .

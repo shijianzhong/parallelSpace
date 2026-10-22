@@ -1,0 +1,46 @@
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix soc:  <http://soc.example/ontology#> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix shp:  <http://soc.example/shacl/person#> .
+
+shp:PersonCardShape a sh:NodeShape ;
+    sh:targetClass soc:Person ;
+    sh:property [
+        sh:path soc:displayName ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:minLength 1 ;
+        sh:maxLength 64 ;
+    ] ;
+    sh:property [
+        sh:path soc:status ;
+        sh:minCount 1 ;
+        sh:in ( "created" "pending" "active" "idle" "dormant" "offline" "suspended" "deceased" "archived" ) ;
+    ] ;
+    sh:property [
+        sh:path soc:locatedAt ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:class soc:Location ;
+    ] ;
+    sh:property [
+        sh:path soc:hasSkill ;
+        sh:minCount 1 ;
+        sh:maxCount 3 ;
+        sh:class soc:Skill ;
+    ] ;
+    sh:property [
+        sh:path soc:hasGoal ;
+        sh:minCount 1 ;
+        sh:class soc:Goal ;
+    ] ;
+    sh:property [
+        sh:path soc:knows ;
+        sh:maxCount 3 ;
+    ] ;
+    sh:property [
+        sh:path soc:reputation ;
+        sh:maxInclusive 1.0 ;
+    ] .

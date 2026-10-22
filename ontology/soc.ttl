@@ -1,0 +1,232 @@
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix prov: <http://www.w3.org/ns/prov#> .
+@prefix org:  <http://www.w3.org/ns/org#> .
+@prefix geo:  <http://www.opengis.net/ont/geosparql#> .
+@prefix time: <http://www.w3.org/2006/time#> .
+@prefix soc:  <http://soc.example/ontology#> .
+
+<http://soc.example/ontology>
+    a owl:Ontology ;
+    owl:versionIRI <http://soc.example/ontology/v1> ;
+    owl:versionInfo "1.0.0" ;
+    rdfs:comment "地球模拟社会核心本体 v1.0" ;
+    owl:imports <http://soc.example/gov/v1> ,
+                <http://soc.example/econ/v1> ,
+                <http://soc.example/geo/v1> ,
+                <http://soc.example/time/v1> .
+
+############################################################
+# 核心类
+############################################################
+
+soc:Agent a owl:Class ;
+    rdfs:subClassOf prov:Agent ;
+    rdfs:comment "社会中可行动的主体，包括 Person 和 NPC" .
+
+soc:Person a owl:Class ;
+    rdfs:subClassOf soc:Agent ;
+    rdfs:comment "人类玩家控制的分身" .
+
+soc:NPC a owl:Class ;
+    rdfs:subClassOf soc:Agent ;
+    rdfs:comment "系统 NPC，初期运营公共设施" .
+
+soc:Organization a owl:Class ;
+    rdfs:subClassOf prov:Collection ;
+    rdfs:comment "组织，必须有章程" .
+
+soc:Position a owl:Class ;
+    rdfs:subClassOf org:Post ;
+    rdfs:comment "组织内的职位，由章程实例化" .
+
+soc:Resource a owl:Class ;
+    rdfs:subClassOf prov:Entity ;
+    rdfs:comment "可被拥有、交易、消耗的资源" .
+
+soc:Contract a owl:Class ;
+    rdfs:subClassOf prov:Entity ;
+    rdfs:comment "契约，至少两方，双方同意才生效" .
+
+soc:Event a owl:Class ;
+    rdfs:subClassOf prov:Activity ;
+    rdfs:comment "社会事件，append-only 记录，绑定本体版本" .
+
+# scaffold 新增：决策循环产生的事件类型（AgentDecision），与 iri.rs::AGENT_DECISION 对应
+soc:AgentDecision a owl:Class ;
+    rdfs:subClassOf soc:Event ;
+    rdfs:comment "分身决策循环事件，规则化行为不调 LLM" .
+
+soc:Rule a owl:Class ;
+    rdfs:comment "规则/制度，宪法、法律、章程均属此类" .
+
+soc:Location a owl:Class ;
+    rdfs:subClassOf geo:Feature ;
+    rdfs:comment "地点，用 GeoSPARQL 几何表达" .
+
+soc:Goal a owl:Class ;
+    rdfs:subClassOf prov:Entity ;
+    rdfs:comment "分身的目标" .
+
+soc:Skill a owl:Class ;
+    rdfs:comment "技能，可成长" .
+
+soc:Relationship a owl:Class ;
+    rdfs:comment "关系实例，连接两个 Agent" .
+
+############################################################
+# 对象属性
+############################################################
+
+soc:memberOf a owl:ObjectProperty ;
+    rdfs:domain soc:Agent ;
+    rdfs:range soc:Organization ;
+    rdfs:comment "Agent 属于某组织" .
+
+soc:holdsPosition a owl:ObjectProperty ;
+    rdfs:domain soc:Agent ;
+    rdfs:range soc:Position ;
+    rdfs:comment "Agent 持有某职位" .
+
+soc:positionIn a owl:ObjectProperty ;
+    rdfs:domain soc:Position ;
+    rdfs:range soc:Organization ;
+    rdfs:comment "职位属于某组织" .
+
+soc:owns a owl:ObjectProperty ;
+    rdfs:domain soc:Agent ;
+    rdfs:range soc:Resource ;
+    rdfs:comment "Agent 拥有资源" .
+
+soc:partyTo a owl:ObjectProperty ;
+    rdfs:domain soc:Agent ;
+    rdfs:range soc:Contract ;
+    rdfs:comment "Agent 是契约一方" .
+
+soc:locatedAt a owl:ObjectProperty ;
+    rdfs:domain soc:Agent ;
+    rdfs:range soc:Location ;
+    rdfs:comment "Agent 所在地点" .
+
+soc:knows a owl:ObjectProperty ;
+    rdfs:domain soc:Agent ;
+    rdfs:range soc:Agent ;
+    rdfs:comment "Agent 认识另一 Agent" .
+
+soc:hasGoal a owl:ObjectProperty ;
+    rdfs:domain soc:Agent ;
+    rdfs:range soc:Goal ;
+    rdfs:comment "Agent 拥有目标" .
+
+soc:hasSkill a owl:ObjectProperty ;
+    rdfs:domain soc:Agent ;
+    rdfs:range soc:Skill ;
+    rdfs:comment "Agent 拥有技能" .
+
+soc:performed a owl:ObjectProperty ;
+    rdfs:domain soc:Event ;
+    rdfs:range soc:Agent ;
+    rdfs:comment "事件由某 Agent 执行" .
+
+soc:affected a owl:ObjectProperty ;
+    rdfs:domain soc:Event ;
+    rdfs:range [ a owl:Class ; owl:unionOf ( soc:Agent soc:Resource soc:Contract soc:Organization ) ] ;
+    rdfs:comment "事件影响的实体" .
+
+soc:subOrganizationOf a owl:ObjectProperty ;
+    rdfs:domain soc:Organization ;
+    rdfs:range soc:Organization ;
+    rdfs:comment "子组织关系" .
+
+soc:underOntologyVersion a owl:DatatypeProperty ;
+    rdfs:domain soc:Event ;
+    rdfs:range xsd:string ;
+    rdfs:comment "事件发生时的本体版本，由 OntologyRouter 注入" .
+
+soc:hasRelationship a owl:ObjectProperty ;
+    rdfs:domain soc:Agent ;
+    rdfs:range soc:Relationship ;
+    rdfs:comment "Agent 拥有的关系实例" .
+
+soc:relationshipWith a owl:ObjectProperty ;
+    rdfs:domain soc:Relationship ;
+    rdfs:range soc:Agent ;
+    rdfs:comment "关系的另一端" .
+
+############################################################
+# 数据属性
+############################################################
+
+soc:displayName a owl:DatatypeProperty ;
+    rdfs:domain soc:Agent ;
+    rdfs:range xsd:string .
+
+soc:status a owl:DatatypeProperty ;
+    rdfs:domain soc:Agent ;
+    rdfs:range xsd:string ;
+    rdfs:comment "生命周期状态：created/pending/active/idle/dormant/offline/suspended/deceased/archived" .
+
+soc:trustLevel a owl:DatatypeProperty ;
+    rdfs:domain soc:Relationship ;
+    rdfs:range xsd:decimal ;
+    rdfs:comment "信任度，0.0-1.0" .
+
+soc:reputation a owl:DatatypeProperty ;
+    rdfs:domain soc:Agent ;
+    rdfs:range xsd:decimal ;
+    rdfs:comment "社会声望" .
+
+############################################################
+# 关键公理
+############################################################
+
+# 持有职位的 Agent 必须是组织成员
+# scaffold 修正：原公理 `soc:holdsPosition rdfs:subPropertyOf soc:memberOf` 语义错误——
+# 它会推出 `agent soc:memberOf <position>`（宾语是职位而非组织）。
+# 正确表达是 memberOf 上的属性链：holdsPosition ∘ positionIn⁻¹。
+soc:memberOf owl:propertyChainAxiom (
+    soc:holdsPosition
+    [ owl:inverseOf soc:positionIn ]
+) .
+
+# 职位必须属于某组织
+soc:Position rdfs:subClassOf [
+    a owl:Restriction ;
+    owl:onProperty soc:positionIn ;
+    owl:someValuesFrom soc:Organization
+] .
+
+# 组织必须有章程
+soc:Organization rdfs:subClassOf [
+    a owl:Restriction ;
+    owl:onProperty <http://soc.example/gov/ontology#hasCharter> ;
+    owl:someValuesFrom <http://soc.example/gov/ontology#OrganizationCharter>
+] .
+
+# 契约至少两方
+soc:Contract rdfs:subClassOf [
+    a owl:Restriction ;
+    owl:onProperty [ owl:inverseOf soc:partyTo ] ;
+    owl:minCardinality 2
+] .
+
+# 事件必须绑定本体版本
+soc:Event rdfs:subClassOf [
+    a owl:Restriction ;
+    owl:onProperty soc:underOntologyVersion ;
+    owl:cardinality 1
+] .
+
+# 事件必须由某 Agent 执行或影响某实体
+# scaffold 修正：原公理 `soc:performed owl:minCardinality 0` 是永真式（空限制），
+# 不表达任何约束。改为「performed 至少一方 ∪ affected 至少一方」的并类限制，
+# OWL 2 DL 可判定；注意 RL 推理器不从析取前提做推导，运行时强制依赖 L3/ELK。
+soc:Event rdfs:subClassOf [
+    a owl:Class ;
+    owl:unionOf (
+        [ a owl:Restriction ; owl:onProperty soc:performed ; owl:minCardinality 1 ]
+        [ a owl:Restriction ; owl:onProperty soc:affected ; owl:minCardinality 1 ]
+    )
+] .

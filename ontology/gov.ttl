@@ -1,0 +1,147 @@
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix soc:  <http://soc.example/ontology#> .
+@prefix gov:  <http://soc.example/gov/ontology#> .
+
+<http://soc.example/gov/v1>
+    a owl:Ontology ;
+    owl:versionIRI <http://soc.example/gov/v1> ;
+    rdfs:comment "治理本体 v1.0" ;
+    owl:imports <http://soc.example/ontology> .
+
+############################################################
+# 规则类
+############################################################
+
+gov:Constitution a owl:Class ;
+    rdfs:subClassOf soc:Rule ;
+    rdfs:comment "宪法，不可修改" .
+
+gov:Law a owl:Class ;
+    rdfs:subClassOf soc:Rule ;
+    rdfs:comment "法律，可经治理流程修改" .
+
+gov:ContractTemplate a owl:Class ;
+    rdfs:subClassOf soc:Rule ;
+    rdfs:comment "契约模板" .
+
+gov:OrganizationCharter a owl:Class ;
+    rdfs:subClassOf soc:Rule ;
+    rdfs:comment "组织章程，必须定义职位、权限、决策方式" .
+
+############################################################
+# 治理事件类
+############################################################
+
+gov:ArbitrationCase a owl:Class ;
+    rdfs:subClassOf soc:Event ;
+    rdfs:comment "仲裁案件" .
+
+gov:Sanction a owl:Class ;
+    rdfs:subClassOf soc:Event ;
+    rdfs:comment "制裁：罚款/声誉损失/封禁" .
+
+gov:OntologyChangeProposal a owl:Class ;
+    rdfs:subClassOf soc:Event ;
+    rdfs:comment "本体变更提案，本身是社会事件" .
+
+gov:ImpactReport a owl:Class ;
+    rdfs:comment "兼容性分析影响报告" .
+
+gov:SandboxResult a owl:Class ;
+    rdfs:comment "沙箱测试结果" .
+
+gov:RolledBack a owl:Class ;
+    rdfs:subClassOf soc:Event ;
+    rdfs:comment "回滚事件" .
+
+############################################################
+# 属性
+############################################################
+
+gov:hasCharter a owl:ObjectProperty ;
+    rdfs:domain soc:Organization ;
+    rdfs:range gov:OrganizationCharter ;
+    rdfs:comment "组织必须有章程" .
+
+gov:proposedBy a owl:ObjectProperty ;
+    rdfs:domain gov:OntologyChangeProposal ;
+    rdfs:range soc:Agent .
+
+gov:changesConcept a owl:ObjectProperty ;
+    rdfs:domain gov:OntologyChangeProposal ;
+    rdfs:range [ a owl:Class ; owl:unionOf ( owl:Class owl:ObjectProperty owl:DatatypeProperty owl:Restriction ) ] ;
+    rdfs:comment "提案变更的概念" .
+
+gov:changeType a owl:DatatypeProperty ;
+    rdfs:domain gov:OntologyChangeProposal ;
+    rdfs:range [ a owl:Class ; owl:oneOf ( gov:Add gov:Modify gov:Deprecate ) ] .
+
+gov:hasImpactReport a owl:ObjectProperty ;
+    rdfs:domain gov:OntologyChangeProposal ;
+    rdfs:range gov:ImpactReport .
+
+gov:hasSandboxResult a owl:ObjectProperty ;
+    rdfs:domain gov:OntologyChangeProposal ;
+    rdfs:range gov:SandboxResult .
+
+gov:approvedBy a owl:ObjectProperty ;
+    rdfs:domain gov:OntologyChangeProposal ;
+    rdfs:range soc:Agent .
+
+gov:targetVersion a owl:DatatypeProperty ;
+    rdfs:domain gov:OntologyChangeProposal ;
+    rdfs:range xsd:string .
+
+gov:reason a owl:DatatypeProperty ;
+    rdfs:domain gov:OntologyChangeProposal ;
+    rdfs:range xsd:string .
+
+gov:impactSummary a owl:DatatypeProperty ;
+    rdfs:domain gov:ImpactReport ;
+    rdfs:range xsd:string .
+
+gov:sandboxPassed a owl:DatatypeProperty ;
+    rdfs:domain gov:SandboxResult ;
+    rdfs:range xsd:boolean .
+
+############################################################
+# 公理
+############################################################
+
+# 章程必须定义至少一个职位模板
+gov:OrganizationCharter rdfs:subClassOf [
+    a owl:Restriction ;
+    owl:onProperty gov:definesPosition ;
+    owl:minCardinality 1
+] .
+
+gov:definesPosition a owl:ObjectProperty ;
+    rdfs:domain gov:OrganizationCharter ;
+    rdfs:range soc:Position .
+
+# scaffold 修正：shacl/charter.ttl 引用了 gov:decisionMethod，但本体从未声明该属性
+# （SHACL 引用了未声明属性，L4 一致性检查会报 undeclared）。补齐声明。
+gov:decisionMethod a owl:DatatypeProperty ;
+    rdfs:domain gov:OrganizationCharter ;
+    rdfs:range xsd:string ;
+    rdfs:comment "组织决策方式：appointment/election/consensus" .
+
+# 本体变更提案必须有目标和理由
+gov:OntologyChangeProposal rdfs:subClassOf [
+    a owl:Restriction ;
+    owl:onProperty gov:targetVersion ;
+    owl:cardinality 1
+] , [
+    a owl:Restriction ;
+    owl:onProperty gov:reason ;
+    owl:minCardinality 1
+] .
+
+# 审批通过的提案必须有 approvedBy
+gov:OntologyChangeProposal rdfs:subClassOf [
+    a owl:Restriction ;
+    owl:onProperty gov:approvedBy ;
+    owl:minCardinality 0
+] .

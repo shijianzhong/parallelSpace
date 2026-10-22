@@ -1,0 +1,147 @@
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix soc:  <http://soc.example/ontology#> .
+@prefix econ: <http://soc.example/econ/ontology#> .
+
+<http://soc.example/econ/v1>
+    a owl:Ontology ;
+    owl:versionIRI <http://soc.example/econ/v1> ;
+    rdfs:comment "经济本体 v1.0" ;
+    owl:imports <http://soc.example/ontology> .
+
+############################################################
+# 资源类
+############################################################
+
+econ:Currency a owl:Class ;
+    rdfs:subClassOf soc:Resource ;
+    rdfs:comment "抽象货币" .
+
+econ:Commodity a owl:Class ;
+    rdfs:subClassOf soc:Resource ;
+    rdfs:comment "商品" .
+
+econ:Credit a owl:Class ;
+    rdfs:subClassOf soc:Resource ;
+    rdfs:comment "平台积分，绑定账号，不可转让，用于算力消耗和入世费" .
+
+econ:SocialCurrency a owl:Class ;
+    rdfs:subClassOf econ:Currency ;
+    rdfs:comment "社会内货币，本体中可流通，不可兑回法币" .
+
+econ:CreditAccount a owl:Class ;
+    rdfs:comment "账号积分账户" .
+
+############################################################
+# 契约类
+############################################################
+
+econ:EmploymentContract a owl:Class ;
+    rdfs:subClassOf soc:Contract ;
+    rdfs:comment "雇佣契约" .
+
+econ:TradeContract a owl:Class ;
+    rdfs:subClassOf soc:Contract ;
+    rdfs:comment "买卖契约" .
+
+econ:LoanContract a owl:Class ;
+    rdfs:subClassOf soc:Contract ;
+    rdfs:comment "借贷契约" .
+
+econ:CooperationContract a owl:Class ;
+    rdfs:subClassOf soc:Contract ;
+    rdfs:comment "合作契约" .
+
+############################################################
+# 事件类
+############################################################
+
+econ:MarketOrder a owl:Class ;
+    rdfs:subClassOf soc:Event ;
+    rdfs:comment "市场挂单" .
+
+econ:Transaction a owl:Class ;
+    rdfs:subClassOf soc:Event ;
+    rdfs:comment "交易事件，必须涉及资源" .
+
+econ:RegistrationFeePaid a owl:Class ;
+    rdfs:subClassOf soc:Event ;
+    rdfs:comment "入世费支付" .
+
+econ:CreditPurchased a owl:Class ;
+    rdfs:subClassOf soc:Event ;
+    rdfs:comment "积分购买，含订单号、金额、渠道、确认人" .
+
+econ:CreditConsumed a owl:Class ;
+    rdfs:subClassOf soc:Event ;
+    rdfs:comment "积分消耗（算力）" .
+
+econ:CurrencyExchanged a owl:Class ;
+    rdfs:subClassOf soc:Event ;
+    rdfs:comment "积分兑换社会货币" .
+
+############################################################
+# 属性
+############################################################
+
+econ:amount a owl:DatatypeProperty ;
+    rdfs:domain [ a owl:Class ; owl:unionOf ( econ:Transaction econ:CreditPurchased econ:CreditConsumed ) ] ;
+    rdfs:range xsd:decimal .
+
+econ:currency a owl:ObjectProperty ;
+    rdfs:domain econ:Transaction ;
+    rdfs:range econ:Currency .
+
+econ:consumesCredit a owl:ObjectProperty ;
+    rdfs:domain soc:Event ;
+    rdfs:range econ:CreditAccount .
+
+econ:creditDelta a owl:DatatypeProperty ;
+    rdfs:domain econ:CreditPurchased ;
+    rdfs:range xsd:integer .
+
+econ:exchangeRate a owl:DatatypeProperty ;
+    rdfs:domain econ:SocialCurrency ;
+    rdfs:range xsd:decimal .
+
+econ:orderId a owl:DatatypeProperty ;
+    rdfs:domain econ:CreditPurchased ;
+    rdfs:range xsd:string .
+
+econ:paymentChannel a owl:DatatypeProperty ;
+    rdfs:domain econ:CreditPurchased ;
+    rdfs:range xsd:string .
+
+econ:confirmedBy a owl:DatatypeProperty ;
+    rdfs:domain econ:CreditPurchased ;
+    rdfs:range xsd:string .
+
+############################################################
+# 公理
+############################################################
+
+# 交易必须涉及至少一个 Resource
+econ:Transaction rdfs:subClassOf soc:Event , [
+    a owl:Restriction ;
+    owl:onProperty soc:affected ;
+    owl:someValuesFrom econ:Resource
+] .
+
+# 积分购买必须有订单号和金额
+econ:CreditPurchased rdfs:subClassOf [
+    a owl:Restriction ;
+    owl:onProperty econ:orderId ;
+    owl:cardinality 1
+] , [
+    a owl:Restriction ;
+    owl:onProperty econ:amount ;
+    owl:cardinality 1
+] .
+
+# 社会货币不可与法币双向兑换（语义约束，运行时 SHACL 补充）
+econ:SocialCurrency rdfs:subClassOf [
+    a owl:Restriction ;
+    owl:onProperty econ:exchangeRate ;
+    owl:maxCardinality 1
+] .
