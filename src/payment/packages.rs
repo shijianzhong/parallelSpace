@@ -57,7 +57,6 @@ mod tests {
     use super::*;
 
     #[wasm_bindgen_test]
-    #[wasm_bindgen_test]
     fn redeem_rate_below_all_buy_prices() {
         // 任一套餐买到的积分，其兑换总价必须低于买入价，否则存在套利回路
         for p in CREDIT_PACKAGES {

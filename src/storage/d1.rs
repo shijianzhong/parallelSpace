@@ -417,6 +417,7 @@ pub async fn apply_credit_adjustment(
 
 /// 转让的入账侧：给收款方上调余额 + 成对流水（out/in 共享 event_id）同一 batch。
 /// 扣减侧已由 conditional_debit_credits 先行占住余额，本函数只做入账与记账。
+#[allow(clippy::too_many_arguments)]
 pub async fn apply_credit_transfer_in(
     db: &D1Database,
     out_txn_id: &str,
@@ -470,6 +471,7 @@ pub async fn apply_credit_transfer_in(
 }
 
 /// 建兑换申请行 + 冻结流水，同一 batch。余额已由 conditional_debit_credits 扣减（冻结）。
+#[allow(clippy::too_many_arguments)]
 pub async fn create_redeem_request(
     db: &D1Database,
     request_id: &str,
