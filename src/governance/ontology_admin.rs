@@ -320,6 +320,32 @@ pub fn proposal_concepts(turtle: &str) -> AppResult<Vec<String>> {
     Ok(concepts)
 }
 
+/// 取回某版本全部域的提案 Turtle 文本（R2 只读，按域拼接）。
+///
+/// analyze_impact 与沙箱（governance::sandbox）共用同一条取回路径，
+/// 避免出现两套「提案装载」语义。
+pub async fn load_version_turtle(env: &Env, version: &str, domains: &[String]) -> AppResult<String> {
+    let bucket = env.bucket("R2")?;
+    let mut turtle = String::new();
+    for domain in domains {
+        let key = r2::ontology_key(version, &format!("{domain}.ttl"));
+        let object = bucket
+            .get(&key)
+            .execute()
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("ontology file {key}")))?;
+        let body = object
+            .body()
+            .ok_or_else(|| AppError::Internal(format!("r2 object {key} has no body")))?;
+        let bytes = body.bytes().await?;
+        let text = String::from_utf8(bytes)
+            .map_err(|e| AppError::Internal(format!("ontology file {key} not utf8: {e}")))?;
+        turtle.push_str(&text);
+        turtle.push('\n');
+    }
+    Ok(turtle)
+}
+
 /// 治理提案影响分析（AGENTS.md §8.7 的 analyze_impact，G4 接线落地）。
 ///
 /// 流程：从 R2 取回该版本的提案 Turtle → 临时装载（内嵌基线本体 +
@@ -342,24 +368,7 @@ pub async fn analyze_impact(env: &Env, version: &str) -> AppResult<ImpactReport>
     let domains = d1::get_version_domains(&db, version).await?;
 
     // 取回提案本体文本（R2 只读，不改任何状态）
-    let bucket = env.bucket("R2")?;
-    let mut turtle = String::new();
-    for domain in &domains {
-        let key = r2::ontology_key(version, &format!("{domain}.ttl"));
-        let object = bucket
-            .get(&key)
-            .execute()
-            .await?
-            .ok_or_else(|| AppError::NotFound(format!("ontology file {key}")))?;
-        let body = object
-            .body()
-            .ok_or_else(|| AppError::Internal(format!("r2 object {key} has no body")))?;
-        let bytes = body.bytes().await?;
-        let text = String::from_utf8(bytes)
-            .map_err(|e| AppError::Internal(format!("ontology file {key} not utf8: {e}")))?;
-        turtle.push_str(&text);
-        turtle.push('\n');
-    }
+    let turtle = load_version_turtle(env, version, &domains).await?;
 
     // 临时装载：内嵌基线本体 + 提案文本一轮 OWL 2 RL，看一致性
     let consistent = Owl2RlReasoner::build(&turtle)?.is_consistent();

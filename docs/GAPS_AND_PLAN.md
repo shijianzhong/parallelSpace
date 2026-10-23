@@ -131,3 +131,14 @@
   - 顺带补 G7 遗留 org 创始人绑定：migration 0006 给 organizations 加 `founder_account_id`（历史行 NULL，不回填）；`POST /api/org` 带会话时创始人 = 会话账号、入参声称不一致 → 403；无会话按过渡模式（`REQUIRE_AUTH=true` → 401，否则取入参、可空）；响应与 OrganizationCreated 事件负载均带 `founder_account_id`。
 - **验收**：smoke 新增第 15 节 19 项（沙箱 passed/ticks/无令牌 401、仲裁立案/原被告相同 400、回放空范围/倒置 400、影响分析版本回显/概念含 TransportMode/与基线一致/不存在版本 400、离线 trade Defer/breach Deny/work 放行/本人在线 trade 接受、org 创始人会话优先/入参/冒名 403），全量 **107 通过 / 0 失败**；单测 **91 passed**（+2：`reason::parse_turtle`、`ontology_admin::proposal_concepts`）；cargo check（wasm32 --all-targets）通过、clippy 0 warning。本地跑 smoke 前需先 `wrangler d1 migrations apply --local` 应用 0006（本地环境步骤，非代码事项）。
 - **遗留**：`run_sandbox` 本体仍是 MVP 占位（隔离校验 + 无条件 passed），真实 N tick 仿真是 G9；仲裁只有立案，裁决流程（举证/陪审）仍在 M2；影响分析的完整 SPARQL 口径待 G14。
+
+## 十、G9 落地记录（2026-10-23）
+
+- **已实现**：`governance::sandbox::run_sandbox` 从 MVP 占位（隔离校验 + 无条件 passed）升级为真沙箱，`proposal_id` 语义与 analyze_impact 对齐 = 已发布的本体版本（典型用法：审批前对 pending 版本验证）；判定类失败不走 HTTP Err，而是如实落在 `passed=false` + `notes` 明细。四路判定（任一失败即 failed）：
+  - **真装载**：版本行 + 域清单查生产 D1（只读）→ R2 取回提案 Turtle（与 analyze_impact 共用新抽出的 `ontology_admin::load_version_turtle`）→ `Owl2RlReasoner::build`（内嵌基线 + 提案一轮 OWL 2 RL）装入内存临时推理环境，不碰线上 active 本体；解析/装载失败即 failed、`ticks_run=0`。
+  - **一致性**：装载后出现 owl:Nothing 实例即不一致 → failed，且跳过仿真（自相矛盾的本体下推进无语义）。
+  - **SHACL 全量形状**：提案图过全部内嵌形状（person-card / charter / transaction），违规逐条进 notes（上限 10 条 + 总数），计数落 `shacl_violations` 字段。
+  - **真仿真**：世界快照 = 生产 D1 `list_simulatable_agents`（active/idle，上限 500，与唤醒心跳集同口径）+ 各自生产 KV 热状态（决策循环的真实状态源，未命中用默认值）+ organizations/positions 背景计数；先查初始不变量，再逐 tick 用与线上**同一**纯函数推进——为此把 `decision::run_decision_cycle` 的规则抽成 `decision::rule_step`，线上与沙箱共用，杜绝两套规则。每 tick 后复查不变量：四项资源（money/food/energy/reputation）有限且非负、能量 ≤ 100；打破即 failed 并注明 tick 与 agent。仿真全程内存推进，不落正式事件流、不写任何存储；对生产侧只有只读访问（硬禁约束的是写入）。ticks 上限 1000（`MAX_SANDBOX_TICKS`），超限 400 不静默截断。版本不存在 → 400（OntologyVersionNotFound，与 analyze_impact 同口径）。
+  - **返回结构**：保留 `proposal_id` / `ticks_run` / `passed` / `notes`，新增 `consistent` / `shacl_violations` / `agents_simulated`（向后兼容扩展）。
+- **验收**：smoke 第 15 节沙箱用例由 3 项扩展为 11 项（好提案 V1 passed/consistent/shacl_violations=0/ticks_run=3、坏提案 owl:Nothing 落 pending 后 passed=false/consistent=false/ticks_run=0、不存在版本 400、ticks 超上限 400、无令牌 401），全量 **115 通过 / 0 失败**；单测 **97 passed**（+6：好提案 passed 真仿真、坏提案不一致 failed、坏 Turtle 装载 failed、SHACL 违规 failed、非法快照不变量 failed、rule_step 与线上语义对齐）；cargo check（wasm32 --all-targets）通过、clippy 0 warning。
+- **近似点与遗留**：仿真只覆盖现有规则决策循环（能量推进）——LLM 决策路径未接上游（G12），不在仿真范围；organizations/positions 无 tick 规则，只作快照背景计数不参与推进。SHACL 形状以实例类为 target，TBox 型提案通常无命中，提案携带实例数据时才被真实校验；完整实例层校验待 G14（oxigraph 评估）。沙箱结果不持久化（同步返回），如需留痕审计另立条目。G9 文档原口径「装入沙箱 R2」未采用：提案已在生产 R2 的版本目录中，装载走只读取回 + 内存推理环境，隔离靠「生产侧零写入 + *_SANDBOX 绑定守卫」达成，语义等价且少一份副本同步问题——如后续需要沙箱侧留痕再启用 R2_SANDBOX 落盘。

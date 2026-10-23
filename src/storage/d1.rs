@@ -878,6 +878,20 @@ pub async fn count_agents(db: &D1Database) -> AppResult<u64> {
     count_query(db, "SELECT COUNT(*) AS n FROM agents", None).await
 }
 
+/// 沙箱世界快照的 agent 清单（G9）：状态为 active / idle 的分身 id，
+/// 与 find_wakeable_agents 的心跳集 (b) 同口径，上限与之对齐（500）。
+/// 只读查询——沙箱只读快照、绝不写生产库（AGENTS.md §7 硬禁）。
+pub async fn list_simulatable_agents(db: &D1Database) -> AppResult<Vec<String>> {
+    let rows: Vec<EventActorRow> = db
+        .prepare(
+            "SELECT id FROM agents WHERE status IN ('active', 'idle') ORDER BY id LIMIT 500",
+        )
+        .all()
+        .await?
+        .results()?;
+    Ok(rows.into_iter().map(|r| r.id).collect())
+}
+
 /// 实例计数（G4 analyze_impact 的近似口径）。
 pub async fn count_organizations(db: &D1Database) -> AppResult<u64> {
     count_query(db, "SELECT COUNT(*) AS n FROM organizations", None).await

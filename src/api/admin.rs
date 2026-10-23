@@ -178,8 +178,9 @@ pub async fn analyze_impact(req: worker::Request, ctx: RouteContext<()>) -> AppR
     Ok(Response::from_json(&report)?)
 }
 
-/// 跑本体沙箱（G4 接线）：隔离校验在 governance::sandbox 内，
-/// 真实 N tick 仿真是 G9，本路由只把既有函数挂上 admin 通道。
+/// 跑本体沙箱（G4 接线、G9 真沙箱）：proposal_id 为已发布的本体版本，
+/// governance::sandbox 内真装载提案 + 一致性 + SHACL 全量形状 + 世界
+/// 快照 N tick 规则仿真后如实判定（passed 不再无条件）。
 pub async fn run_sandbox(mut req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
     check_admin(&req, &ctx).map_err(|_| AppError::Unauthorized)?;
     let input: SandboxRunInput = json_body(&mut req).await?;

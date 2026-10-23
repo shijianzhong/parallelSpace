@@ -375,11 +375,35 @@ chk "无存量卡且不带卡激活 = 400" 400 "$(post_code "/api/agent/$AG5/act
 rm -rf "$TTL_DIR5"
 
 echo "== 15. G4 接线：沙箱 / 仲裁 / 回放 / 影响分析 / 离线代理闸门 / 组织创始人"
-# 沙箱：admin 通道挂既有 run_sandbox（隔离校验在模块内；真实仿真是 G9）
-P="{\"proposal_id\":\"smoke-$RUN_ID\",\"ticks\":3}"
+# 沙箱（G9 真沙箱）：proposal_id = 已发布的本体版本。好提案（第 10 节 V1，
+# TransportMode 类定义）真装载 + 一致性 + SHACL + 快照仿真 → passed；
+# 坏提案（实例声明为 owl:Nothing）与基线不一致 → failed 且不跑仿真（ticks_run=0）
+P="{\"proposal_id\":\"$V1\",\"ticks\":3}"
 SB=$(post /api/admin/sandbox/run "$P" -H "x-admin-token: $ADMIN_TOKEN")
-chk "沙箱返回 passed=true" True "$(echo "$SB" | get passed)"
+chk "沙箱好提案 passed=true" True "$(echo "$SB" | get passed)"
+chk "沙箱好提案 consistent=true" True "$(echo "$SB" | get consistent)"
+chk "沙箱好提案 shacl_violations = 0" 0 "$(echo "$SB" | get shacl_violations)"
 chk "沙箱 ticks_run = 3" 3 "$(echo "$SB" | get ticks_run)"
+TTL_DIR8=$(mktemp -d)
+cat > "$TTL_DIR8/soc.ttl" <<'TTL'
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+<urn:smoke:bad> a owl:Nothing .
+TTL
+mkpub15() { python3 -c 'import json,os;rdf=open(os.environ["RDF_FILE"]).read();print(json.dumps({"version":os.environ["VER"],"prior_version":os.environ["PRIOR"],"proposed_by":"admin","changed_concepts":[],"turtle_files":[{"name":os.environ["FNAME"],"content":rdf}]}))'; }
+VBAD="smkbad-$RUN_ID"
+PUBB=$(post /api/admin/ontology/publish "$(VER="$VBAD" PRIOR="$V1" FNAME="soc.ttl" RDF_FILE="$TTL_DIR8/soc.ttl" mkpub15)" -H "x-admin-token: $ADMIN_TOKEN")
+chk "坏提案落 pending" pending "$(echo "$PUBB" | get status)"
+P="{\"proposal_id\":\"$VBAD\",\"ticks\":3}"
+SBB=$(post /api/admin/sandbox/run "$P" -H "x-admin-token: $ADMIN_TOKEN")
+chk "沙箱坏提案 passed=false" False "$(echo "$SBB" | get passed)"
+chk "沙箱坏提案 consistent=false" False "$(echo "$SBB" | get consistent)"
+chk "沙箱坏提案 ticks_run = 0" 0 "$(echo "$SBB" | get ticks_run)"
+rm -rf "$TTL_DIR8"
+P='{"proposal_id":"nope-ver","ticks":3}'
+chk "沙箱不存在的版本 = 400" 400 "$(post_code /api/admin/sandbox/run "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+P="{\"proposal_id\":\"$V1\",\"ticks\":1001}"
+chk "沙箱 ticks 超上限 = 400" 400 "$(post_code /api/admin/sandbox/run "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+P="{\"proposal_id\":\"$V1\",\"ticks\":3}"
 chk "沙箱无 admin 令牌 = 401" 401 "$(post_code /api/admin/sandbox/run "$P")"
 # 仲裁立案：双方为已存在的不同分身（AG 与 AG3）；原被告相同 = 400
 P="{\"claimant_id\":\"$AG\",\"respondent_id\":\"$AG3\",\"claim\":\"smoke arbitration claim\"}"
