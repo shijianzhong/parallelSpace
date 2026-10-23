@@ -201,6 +201,43 @@ P="{\"target_version\":\"never-approved\",\"reason\":\"x\"}"
 chk "回滚到未审批版本 = 400" 400 "$(post_code /api/admin/ontology/rollback "$P" -H "x-admin-token: $ADMIN_TOKEN")"
 rm -rf "$TTL_DIR2"
 
+echo "== 11. 分身激活：pending → active（PersonCard 过 SHACL）"
+# 支付首次确认已把分身推进到 pending（第 5 节确认入账之后）
+ST=$(curl -s --max-time 10 "$BASE/api/agent/$AG")
+chk "支付后状态 = pending" pending "$(echo "$ST" | get status)"
+# PersonCard 文件（合法/非法各一，与第 8 节同一对卡：good 的 status 改自 bad 的 flying）
+TTL_DIR3=$(mktemp -d)
+cat > "$TTL_DIR3/bad.ttl" <<'TTL'
+@prefix soc: <http://soc.example/ontology#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+<urn:agent:smoke> a soc:Person ;
+    soc:status "flying" ;
+    soc:displayName "n" ;
+    soc:locatedAt <urn:l:1> ;
+    soc:hasSkill <urn:s:1> ;
+    soc:hasGoal <urn:g:1> ;
+    soc:reputation "0.5"^^xsd:decimal .
+<urn:l:1> a soc:Location .
+<urn:s:1> a soc:Skill .
+<urn:g:1> a soc:Goal .
+TTL
+sed 's/flying/active/' "$TTL_DIR3/bad.ttl" > "$TTL_DIR3/good.ttl"
+mkact() { python3 -c 'import json,os;print(json.dumps({"person_card_rdf":open(os.environ["RDF_FILE"]).read()}))'; }
+ACTP=$(RDF_FILE="$TTL_DIR3/good.ttl" mkact)
+chk "激活缺 admin token = 401" 401 "$(post_code "/api/agent/$AG/activate" "$ACTP")"
+ACTB=$(RDF_FILE="$TTL_DIR3/bad.ttl" mkact)
+chk "坏 PersonCard 激活 = 422" 422 "$(post_code "/api/agent/$AG/activate" "$ACTB" -H "x-admin-token: $ADMIN_TOKEN")"
+ACT=$(post "/api/agent/$AG/activate" "$ACTP" -H "x-admin-token: $ADMIN_TOKEN")
+chk "合法卡激活 = active" active "$(echo "$ACT" | get status)"
+ST=$(curl -s --max-time 10 "$BASE/api/agent/$AG")
+chk "激活后查询状态 = active" active "$(echo "$ST" | get status)"
+chk "重复激活 = 409" 409 "$(post_code "/api/agent/$AG/activate" "$ACTP" -H "x-admin-token: $ADMIN_TOKEN")"
+# 未付费的新分身（created、无 paid 订单）激活 → 409
+REG2=$(post /api/auth/register "{\"email\":\"smoke2-$RUN_ID@example.com\",\"narrative\":\"x\"}")
+AG2=$(echo "$REG2" | get agent_id)
+chk "未付费分身激活 = 409" 409 "$(post_code "/api/agent/$AG2/activate" "$ACTP" -H "x-admin-token: $ADMIN_TOKEN")"
+rm -rf "$TTL_DIR3"
+
 echo
 echo "结果：$pass 通过 / $fail 失败"
 [ "$fail" -eq 0 ]

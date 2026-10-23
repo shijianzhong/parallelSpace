@@ -36,6 +36,9 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/api/agent/:id", |req, ctx| async move {
             api::into_router_result(api::agent::get_agent(req, ctx).await)
         })
+        .post_async("/api/agent/:id/activate", |req, ctx| async move {
+            api::into_router_result(api::agent::activate(req, ctx).await)
+        })
         // 行动
         .post_async("/api/action", |req, ctx| async move {
             api::into_router_result(api::action::submit(req, ctx).await)

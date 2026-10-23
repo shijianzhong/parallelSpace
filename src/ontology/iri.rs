@@ -8,6 +8,8 @@ pub const GEO_NS: &str = "http://soc.example/geo/ontology#";
 pub const TIME_NS: &str = "http://soc.example/time/ontology#";
 pub const GEO_SPARQL_NS: &str = "http://www.opengis.net/ont/geosparql#";
 pub const OWL_TIME_NS: &str = "http://www.w3.org/2006/time#";
+/// L0 中立宪法（l0-constitution/core.ttl）的命名空间。
+pub const CORE_NS: &str = "http://parallelspace.org/ontology/core#";
 
 pub const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 pub const RDFS_NS: &str = "http://www.w3.org/2000/01/rdf-schema#";
@@ -28,6 +30,9 @@ pub fn sge(local: &str) -> String {
 }
 pub fn ste(local: &str) -> String {
     format!("{TIME_NS}{local}")
+}
+pub fn core(local: &str) -> String {
+    format!("{CORE_NS}{local}")
 }
 
 // ---- 核心类 ----
@@ -84,6 +89,7 @@ pub const ALLOWED_NAMESPACES: &[&str] = &[
     TIME_NS,
     GEO_SPARQL_NS,
     OWL_TIME_NS,
+    CORE_NS,
     RDF_NS,
     RDFS_NS,
     OWL_NS,
@@ -108,11 +114,13 @@ mod tests {
         assert_eq!(gov("Law"), "http://soc.example/gov/ontology#Law");
         assert_eq!(econ("Transaction"), "http://soc.example/econ/ontology#Transaction");
         assert_eq!(ste("socialTick"), "http://soc.example/time/ontology#socialTick");
+        assert_eq!(core("Agent"), "http://parallelspace.org/ontology/core#Agent");
     }
 
     #[wasm_bindgen_test]
     fn iri_whitelist_accepts_ours_rejects_foreign() {
         assert!(iri_allowed(PERSON));
+        assert!(iri_allowed(&core("ChangeProposal")));
         assert!(iri_allowed(GOV_HAS_CHARTER));
         assert!(iri_allowed("http://www.w3.org/2001/XMLSchema#decimal"));
         assert!(!iri_allowed("http://evil.example/ontology#Person"));

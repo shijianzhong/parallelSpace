@@ -1,4 +1,4 @@
-//! 组织创建：POST /api/org（制度先于组织：必须带章程）。
+//! 组织创建：POST /api/org（组织是 L2 seed 域概念；其章程前置是该域自身规则，非 L0 公理）。
 
 use serde::Deserialize;
 use worker::{wasm_bindgen::JsValue, Response, RouteContext};
@@ -22,7 +22,7 @@ pub async fn create(mut req: worker::Request, ctx: RouteContext<()>) -> AppResul
         return Err(AppError::InvalidInput("name required".into()));
     }
     if input.charter_id.is_empty() {
-        // 制度先于组织：没有章程不允许建组织
+        // org 域自身规则：没有章程不允许建组织（仅约束本域，不上升为通用公理）
         return Err(AppError::InvalidInput(
             "charter_id required: organizations are instantiated from charters".into(),
         ));

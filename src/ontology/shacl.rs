@@ -542,6 +542,29 @@ pub fn validate(graph: &Graph, shapes: &[NodeShape]) -> Vec<Violation> {
 /// RDF 负载三元组数量上限（AGENTS.md §4.4：限制三元组数量和 IRI 白名单）。
 pub const MAX_RDF_TRIPLES: usize = 2000;
 
+/// PersonCard 专用入口（分身激活，见 api/agent.rs）：在通用形状校验之外，
+/// 额外要求负载里**必须**有 soc:Person 实例——否则 targetClass 无命中对象、
+/// 违规为空，会把一张空卡误判为合法。
+pub fn validate_person_card(rdf_payload: &str) -> AppResult<ValidationResult> {
+    let graph = Graph::parse_turtle(rdf_payload)
+        .map_err(|e| AppError::ValidationFailed(format!("rdf payload: {e}")))?;
+    if graph.triples.len() > MAX_RDF_TRIPLES {
+        return Err(AppError::InvalidInput(format!(
+            "rdf payload has {} triples, limit is {MAX_RDF_TRIPLES}",
+            graph.triples.len()
+        )));
+    }
+    if graph.instances_of(crate::ontology::iri::PERSON).is_empty() {
+        return Ok(ValidationResult::with_violations(vec![Violation {
+            path: crate::ontology::iri::PERSON.to_string(),
+            message: "person card must contain a soc:Person instance".into(),
+        }]));
+    }
+    let shapes = load_shapes()?;
+    let violations = validate(&graph, &shapes);
+    Ok(ValidationResult::with_violations(violations))
+}
+
 /// L2 入口：校验行动携带的 RDF 负载。
 ///
 /// `action_type` 只进审计语义：形状选择由 sh:targetClass 驱动（SHACL 标准语义，
@@ -801,5 +824,25 @@ soc:B <http://www.w3.org/2000/01/rdf-schema#subClassOf> soc:A .
     fn validate_local_ok_for_valid_payload() {
         let r = validate_local(PERSON_OK, ActionType::Work).unwrap();
         assert!(r.ok, "{r:?}");
+    }
+
+    #[wasm_bindgen_test]
+    fn validate_person_card_accepts_valid_and_rejects_bad_status() {
+        let ok = validate_person_card(PERSON_OK).unwrap();
+        assert!(ok.ok, "{ok:?}");
+        let bad = validate_person_card(&PERSON_OK.replace("\"active\"", "\"flying\"")).unwrap();
+        assert!(!bad.ok);
+        assert!(bad.violations.iter().any(|v| v.path.ends_with("#status")));
+    }
+
+    #[wasm_bindgen_test]
+    fn validate_person_card_rejects_card_without_person() {
+        // 没有 soc:Person 实例的负载不能因为「无形状命中」被误判合法
+        let r = validate_person_card(
+            "@prefix soc: <http://soc.example/ontology#> .\n<urn:x:1> a soc:Goal .",
+        )
+        .unwrap();
+        assert!(!r.ok);
+        assert!(r.violations.iter().any(|v| v.path.ends_with("#Person")));
     }
 }

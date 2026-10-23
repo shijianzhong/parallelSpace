@@ -38,10 +38,14 @@ pub async fn get_cached(
         temperature_millis,
         seed,
     );
-    Ok(kv_store.get(&key).json::<String>().await?)
+    // 存的是裸字符串（put(String)），必须用 text() 读——用 .json::<String>()
+    // 会对裸串做 JSON.parse 直接抛错（README「三个坑」第 3 条 / kv.rs 既定配对规则）。
+    Ok(kv_store.get(&key).text().await?)
 }
 
 /// 写缓存（TTL 7 天，SAD §6.2）。
+/// 只允许写入**真实上游**的响应；占位提案禁止写入（会毒化缓存，见 gateway.rs）。
+/// 当前无调用方：真实上游接入（M2）时由 gateway 在拿到真实响应后调用。
 pub async fn put_cached(
     env: &Env,
     prompt: &str,

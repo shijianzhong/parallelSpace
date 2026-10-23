@@ -121,7 +121,32 @@ pub async fn confirm_payment(
     )
     .await?;
 
-    // 7. 刷新余额缓存
+    // 7. 分身状态推进 created → pending（注册主线的中间站，见 GAPS G1）：
+    // 本函数只在首次入账路径走到这里（重放走 already_confirmed 提前返回），
+    // 天然幂等。推进失败不回滚已落账的支付（各步本就分批提交、非单事务），
+    // 只记日志——激活接口凭 paid 订单可自愈补走这一步（api/agent.rs）。
+    match d1::get_agent_by_account(&db, &order.account_id).await {
+        Ok(Some(agent)) if agent.status == "created" => {
+            match d1::transition_agent_status(&db, &agent.id, "created", "pending").await {
+                Ok(true) => crate::common::logging::info(
+                    "agent_created_to_pending",
+                    serde_json::json!({ "agent_id": agent.id, "order_id": order_id }),
+                ),
+                Ok(false) => {}
+                Err(e) => crate::common::logging::error(
+                    "agent_pending_transition_failed",
+                    serde_json::json!({ "agent_id": agent.id, "error": e.to_string() }),
+                ),
+            }
+        }
+        Ok(_) => {}
+        Err(e) => crate::common::logging::error(
+            "agent_lookup_for_pending_failed",
+            serde_json::json!({ "account_id": order.account_id, "error": e.to_string() }),
+        ),
+    }
+
+    // 8. 刷新余额缓存
     if let Ok(kv_store) = env.kv("KV") {
         kv::put_credit_balance_cache(&kv_store, &order.account_id, new_balance).await?;
     }

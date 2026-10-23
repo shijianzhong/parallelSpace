@@ -50,7 +50,7 @@ pub struct ApproveInput {
     pub approved_by: String,
 }
 
-fn check_admin(req: &worker::Request, ctx: &RouteContext<()>) -> Result<()> {
+pub(crate) fn check_admin(req: &worker::Request, ctx: &RouteContext<()>) -> Result<()> {
     let expected = ctx
         .env
         .secret("ADMIN_TOKEN")

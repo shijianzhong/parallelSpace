@@ -117,31 +117,28 @@ pub async fn propose(env: &Env, req: &LlmRequest) -> AppResult<LlmResponse> {
             "temperature_millis": temperature_millis,
             "seed": seed,
             "prompt_hash": cache::prompt_hash(&req.context),
+            "response_hash": cache::prompt_hash("placeholder:idle"),
+            "validation_result": "placeholder_not_validated",
             "tick": crate::agent_runtime::scheduler::current_tick(),
             "ontology_version": ontology_version,
         }),
     );
 
+    // 配额预扣：按本次 max_tokens 计入当日用量，让入口的配额检查真实生效
+    // （此前 add_quota_used 无调用方，used 恒为 0、配额永不触发——GAPS G2）。
+    crate::storage::kv::add_quota_used(&kv_store, &date, &req.agent_id, req.max_tokens as i64)
+        .await?;
+
     // MVP 占位提案：证明管道（配额→缓存→路由→提案结构）打通；
     // 真实上游接入前，行动默认走规则路径。
+    // ⚠️ 占位提案**不写缓存**：写进去会按 7 天 TTL 毒化同一 prompt 的后续真实
+    // 响应（命中缓存后永远返回 idle）——GAPS G2。
     let proposal = ActionProposal {
         action: "idle".into(),
         target_id: None,
         params: serde_json::json!({}),
         rationale: "llm upstream not wired in MVP".into(),
     };
-    let response_json = serde_json::to_string(&proposal)
-        .map_err(|e| AppError::Internal(format!("serialize proposal: {e}")))?;
-    cache::put_cached(
-        env,
-        &req.context,
-        &ontology_version,
-        model,
-        temperature_millis,
-        seed,
-        &response_json,
-    )
-    .await?;
 
     Ok(LlmResponse {
         proposal,

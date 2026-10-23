@@ -55,7 +55,7 @@
 1. **距离不进 L0**。「多远」依赖度量约定（欧氏 / 网络 / 耗时 / 关系亲疏……），约定即涌现。L0 只保证位置可指称，不预设距离、坐标系、邻接、移动。
 2. **行动类型零枚举**。连 `Move` 都不在 L0 预声明。若社会发展出移动，由它自己提案为 L2 行动类型。交通同理，是 L2 取值，不是宪法。
 
-> 现状标注（写代码时必须分清「定调」与「已落地」）：`core.ttl` 目前仍是草案（v0.1.0-draft，`l0-constitution/` 未进构建）；现有 `ontology/` 五域仍是实现基线。现有代码中的 `ActionType` 枚举（Move / Work / Trade …）、`touches_l0` 的旧 4 项 IRI 清单，均属**实现基线遗留**，不得上升为 L0 公理、不得据此新增人类模板；`core.ttl` 正式落地时，L0 保护清单须扩为 core 全量原语。
+> 现状标注（写代码时必须分清「定调」与「已落地」）：`core.ttl` 目前仍是草案（v0.1.0-draft，`l0-constitution/` 未进构建）；现有 `ontology/` 五域仍是实现基线。现有代码中的 `ActionType` 枚举（Move / Work / Trade …）属**实现基线遗留**，不得上升为 L0 公理、不得据此新增人类模板。`touches_l0` 保护清单已于 2026-10-23 扩为 core 全量原语（旧 4 项保留兼容）。
 
 #### 2.4 种子域（seed）定位
 
@@ -525,6 +525,5 @@ agent 行为模式 ──LLM 概念化──> ChangeProposal(targetLayer = L1 | 
 - LLM 上游未接：概念化执行者缺位，新概念不会自动生成，只能治理员手动提案。
 - L3 本体引擎未接、oxigraph 未引入、Durable Objects WebSocket 为占位。
 - `core.ttl` 仍是草案未进构建；五域仍是实现基线（L2 seed 定位）。
-- 分身 `created → active` 激活 API 未接（lifecycle 规则已备）。
 - 审批由 admin token 持有者执行，无独立治理身份。
 - 仅在 miniflare 本地态验证，未在真实 Cloudflare Paid 账号部署；D1 事务与 Queues 线上语义以真实环境为准。

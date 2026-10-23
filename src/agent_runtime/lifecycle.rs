@@ -1,6 +1,6 @@
 //! 分身生命周期状态机（与 common/types.rs 的 AgentStatus 对应）。
 //!
-//! 制度先于组织：created（已建账号）→ pending（已支付待治理确认）→ active。
+//! 注册主线：created（已建账号）→ pending（支付首次确认）→ active（治理员携 PersonCard 激活）。
 //! 迁移表是纯函数，便于单测；写库由 api/agent.rs 负责。
 
 use crate::common::error::{AppError, AppResult};

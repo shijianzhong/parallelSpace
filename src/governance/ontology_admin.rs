@@ -20,11 +20,42 @@ use crate::ontology::version::{OntologyRouter, OntologyVersion};
 use crate::storage::{d1, kv, r2};
 
 /// L0 宪法层概念：这些 IRI 的任何变更一律拒绝。
+///
+/// 两部分：① 实现基线的旧 IRI（向后兼容，存量事件/冒烟在用）；
+/// ② `l0-constitution/core.ttl` 的全量原语（9 个类 + 全部 core 属性 + 元属性），
+/// 按 AGENTS.md v1.1 §2.3 的落地要求扩容——core 正式进构建前，闸门先到位。
 const L0_CONCEPTS: &[&str] = &[
+    // ① 旧基线
     "http://soc.example/gov/ontology#Constitution",
     "http://soc.example/ontology#Agent",
     "http://soc.example/ontology#Event",
     "http://soc.example/ontology#underOntologyVersion",
+    // ② core.ttl 全量（http://parallelspace.org/ontology/core#）
+    "http://parallelspace.org/ontology/core#Thing",
+    "http://parallelspace.org/ontology/core#Agent",
+    "http://parallelspace.org/ontology/core#Instant",
+    "http://parallelspace.org/ontology/core#Event",
+    "http://parallelspace.org/ontology/core#Action",
+    "http://parallelspace.org/ontology/core#Entity",
+    "http://parallelspace.org/ontology/core#Relation",
+    "http://parallelspace.org/ontology/core#Observation",
+    "http://parallelspace.org/ontology/core#Location",
+    "http://parallelspace.org/ontology/core#ChangeProposal",
+    "http://parallelspace.org/ontology/core#tick",
+    "http://parallelspace.org/ontology/core#duration",
+    "http://parallelspace.org/ontology/core#locatedAt",
+    "http://parallelspace.org/ontology/core#actor",
+    "http://parallelspace.org/ontology/core#underOntologyVersion",
+    "http://parallelspace.org/ontology/core#involves",
+    "http://parallelspace.org/ontology/core#from",
+    "http://parallelspace.org/ontology/core#to",
+    "http://parallelspace.org/ontology/core#about",
+    "http://parallelspace.org/ontology/core#proposedBy",
+    "http://parallelspace.org/ontology/core#targetLayer",
+    "http://parallelspace.org/ontology/core#proposalStatus",
+    "http://parallelspace.org/ontology/core#appliesFromVersion",
+    "http://parallelspace.org/ontology/core#layer",
+    "http://parallelspace.org/ontology/core#amendable",
 ];
 
 /// L0 宪法域（中立宪法 core.ttl 的承载名）：不可注册、不可发布。
@@ -354,6 +385,21 @@ mod tests {
         ]));
         assert!(touches_l0(&[
             "http://soc.example/ontology#Event".to_string()
+        ]));
+        // core.ttl 全量原语（类与属性）同样命中
+        for core_iri in [
+            "http://parallelspace.org/ontology/core#Agent",
+            "http://parallelspace.org/ontology/core#Action",
+            "http://parallelspace.org/ontology/core#Relation",
+            "http://parallelspace.org/ontology/core#ChangeProposal",
+            "http://parallelspace.org/ontology/core#targetLayer",
+            "http://parallelspace.org/ontology/core#locatedAt",
+        ] {
+            assert!(touches_l0(&[core_iri.to_string()]), "{core_iri}");
+        }
+        // L2 涌现候选（如 TransportMode）不命中
+        assert!(!touches_l0(&[
+            "http://parallelspace.org/ontology/core#TransportMode".to_string()
         ]));
         // L1/L2 概念不在 L0 名单
         assert!(!touches_l0(&[

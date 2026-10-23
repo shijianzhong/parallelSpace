@@ -157,7 +157,7 @@ npx wrangler d1 migrations apply parallelspace-sandbox-db   --local
 npx wrangler dev --local --port 8787
 ```
 
-### 5. 端到端冒烟（另开终端，50 项断言）
+### 5. 端到端冒烟（另开终端，57 项断言）
 
 ```bash
 bash scripts/smoke.sh
@@ -195,16 +195,17 @@ bash scripts/smoke.sh
 | 编译（dev） | `cargo check --target wasm32-unknown-unknown` | 0 error / 0 warning |
 | 编译（release） | `cargo build --release --target wasm32-unknown-unknown` | Finished |
 | Clippy（含测试目标） | `cargo clippy --target wasm32-unknown-unknown --all-targets` | 0 warning |
-| 单元测试 | `cargo test --target wasm32-unknown-unknown` | **85 passed / 0 failed** |
+| 单元测试 | `cargo test --target wasm32-unknown-unknown` | **87 passed / 0 failed** |
 | 迁移 SQL | `sqlite3 x.db < migrations/0001_init.sql` | 15 表，`foreign_key_check` / `integrity_check` ok |
 | 迁移 SQL（0002） | `wrangler d1 migrations apply <db> --local` | 域注册表 + versions 状态列 + 五域种子就位 |
 | Workers 打包 | `worker-build --release` | wasm + shim.mjs 产出成功 |
 | 本地运行时 | `wrangler dev --local` | 10 个绑定全部就绪，`/health` 200 |
-| 端到端冒烟 | `bash scripts/smoke.sh` | **50 通过 / 0 失败**（连跑两次均绿） |
+| 端到端冒烟 | `bash scripts/smoke.sh` | **57 通过 / 0 失败** |
 
 冒烟覆盖：注册 → 下单（服务端定价、忽略客户端金额、无账号 404）→ admin 令牌 401 →
 金额二次核对 409 → 入账 500 积分 → 幂等重放（余额不变）→ 同一流水号复用 409 →
 SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 FeatureCollection →
+分身激活（pending / 401 无令牌 / 422 坏卡 / active / 409 重复与未付费）→
 域注册（seed / 409 重复 / L0 保留域 403 / 非法层 400 / 路径穿越 400）→
 提案落 pending（未审批不写 KV、不生效）→ 审批激活（版本 + seed 域联动）→
 重复审批 409 → 回滚状态机（rolled_back / 目标须已审批）。
@@ -241,10 +242,17 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
   防目录穿越；`core` 等 L0 保留域与 L0 层注册一律 403
 - **种子降级**：soc/gov/econ/geo/time 五域注册为 **L2 seed**（存在论纠偏的落地：人类制度模板从宪法层降级为涌现候选）
 - 支付：`POST /api/payment/order` 下单（服务端定价，客户端仅选套餐）+ 幂等入账 `confirm_payment`
-- Cron tick + Queue 消费、KV 热状态/配额/缓存、R2 事件日志
-- 注册 / 查询 / 行动 / 组织 / 地图 / 下单 / 支付确认 / 本体域注册 / 提案 / 审批 / 回滚 API
+- **分身激活链路**（2026-10-23 补齐，见 `docs/GAPS_AND_PLAN.md` G1）：支付首次确认推进
+  `created → pending`；`POST /api/agent/{id}/activate`（admin 执行）带 PersonCard 过 SHACL
+  后 `pending → active`，条件迁移防并发，激活凭 paid 订单可自愈补走 pending
+- **L0 保护清单扩容**：`touches_l0` 已含 core.ttl 全量原语（旧 4 项保留兼容）；`iri.rs` 新增
+  `core:` 命名空间并入 IRI 白名单
+- **LLM 网关修复**：缓存读改 `text()` 配对（原 `.json::<String>()` 违反 KV 配对规则）；
+  占位提案不再写缓存（防 7 天毒化）；配额改为真实预扣（`add_quota_used` 接入）
+- Cron tick（唤醒集合 = 本 tick 事件 actor ∪ active/idle 心跳）+ Queue 消费、KV 热状态/配额/缓存、R2 事件日志
+- 注册 / 查询 / 激活 / 行动 / 组织 / 地图 / 下单 / 支付确认 / 本体域注册 / 提案 / 审批 / 回滚 API
 - 错误响应统一 JSON `{"error":"<CODE>","message":"..."}`，5xx 不外泄内部细节
-- 49 个 Rust 文件、85 个单测、50 项端到端断言
+- 49 个 Rust 文件、87 个单测、57 项端到端断言
 - L0 中立宪法草案 `l0-constitution/core.ttl`（rdflib 实测：140 三元组、9 原语、零 imports、零人类模板泄漏）
 
 ---
@@ -259,10 +267,8 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
 - Durable Objects WebSocket 广播占位
 - 注册后**不会自动建订单**，需前端再调 `/api/payment/order`；注册响应里的
   `next: payment_required` 只是提示
-- 分身支付后仍是 `created` 状态，`created → active` 的迁移入口（需 SHACL 校验 PersonCard）
-  尚未接到 API，`lifecycle::can_transition` 已备好规则
-- L0 中立宪法仍是**草案**（`l0-constitution/` 未进构建）；`core.ttl` 尚未替换现有五域、
-  `version.rs` 的 L0 保护清单尚未扩为 core 全量
+- L0 中立宪法仍是**草案**（`l0-constitution/` 未进构建）；`core.ttl` 尚未替换现有五域
+  （`touches_l0` 保护清单已先行扩为 core 全量，见「当前已实现」）
 - 审批目前仍由 admin token 持有者扮演（`approved_by` 为入参但无独立治理身份），两段式的**人**是真实的、**自动化**不是
 - 冒烟跑在 miniflare 本地态，**未在真实 Cloudflare 账号（Workers Paid）上部署验证**；
   D1 事务与 Queues 的线上语义（尤其是 batch 内唯一索引冲突的表现）以真实环境为准
@@ -271,7 +277,6 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
 
 - [ ] `l0-constitution/core.ttl` 正式落地为 L0（soc/gov/econ 退场为 L2 参考域）
 - [ ] 接入真实 Cloudflare Workers Paid 部署并跑通 D1/Queues 线上语义
-- [ ] `created → active` 分身激活 API（SHACL 校验 PersonCard）
 - [ ] LLM 概念化最小闭环：从 agent 行为模式发现未命名模式 → 生成 Turtle 提案 → 过守门流水线
 - [ ] LLM 网关与 L3 本体引擎对接
 - [ ] MapLibre 前端（M2）与 WebSocket 实时广播

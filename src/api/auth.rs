@@ -1,11 +1,12 @@
-//! 注册接口（AGENTS.md §7.1 的 MVP 子集）。
+//! 注册接口（AGENTS.md §8.1 的 MVP 子集）。
 //!
 //! 完整链路：账号会话 + 出身模板 + 自然语言叙述 → LLM 结构化为 PersonCard →
-//! SHACL 校验 → 支付 → confirm_payment → 实例化 soc:Person → pending→active。
-//! 本 scaffold 已实现：账号/分身落库（created 状态）、输入消毒、审计。
+//! SHACL 校验 → 支付 → confirm_payment → pending → 治理员激活 → active。
+//! 本模块负责第一步：账号/分身落库（created 状态）、输入消毒、审计。
+//! 支付推进 pending 在 payment/credit.rs，激活在 api/agent.rs::activate。
 //! TODO(M2)：LLM 结构化 PersonCard（llm/gateway.rs 就绪后接入）。
 //!
-//! 硬规则：未支付不得实例化 active 分身（lifecycle::can_transition 已挡）。
+//! 硬规则：未支付不得激活成分身（lifecycle 状态门 + 激活接口的 paid 订单校验）。
 
 use serde::Deserialize;
 use worker::{Response, RouteContext};

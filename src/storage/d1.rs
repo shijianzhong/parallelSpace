@@ -106,7 +106,7 @@ pub async fn account_exists(db: &D1Database, account_id: &str) -> AppResult<bool
     Ok(row.map(|r| r.ok == 1).unwrap_or(false))
 }
 
-/// 创建分身（制度先于组织：初始状态 created，支付成功并经治理确认后才 pending→active）。
+/// 创建分身（初始状态 created；支付首次确认推进 pending，治理员激活后 active）。
 pub async fn create_agent(
     db: &D1Database,
     id: &str,
@@ -137,6 +137,59 @@ pub async fn get_agent(db: &D1Database, id: &str) -> AppResult<Option<AgentRow>>
         .bind(&[s(id)])?
         .first::<AgentRow>(None)
         .await?)
+}
+
+/// 取账号名下的分身（MVP 一账号一分身）。
+pub async fn get_agent_by_account(
+    db: &D1Database,
+    account_id: &str,
+) -> AppResult<Option<AgentRow>> {
+    Ok(db
+        .prepare(
+            "SELECT id, account_id, status, location_id, created_at, ontology_version \
+             FROM agents WHERE account_id = ?1 ORDER BY created_at ASC LIMIT 1",
+        )
+        .bind(&[s(account_id)])?
+        .first::<AgentRow>(None)
+        .await?)
+}
+
+/// 条件迁移分身状态：仅当当前状态恰为 `from` 时才改为 `to`，返回是否迁移了 1 行。
+/// 与 `mark_order_paid` 同款写法：状态机的合法性由调用方先用
+/// `lifecycle::ensure_transition` 校验，本函数负责并发下的原子抢占——
+/// 两个并发迁移只有一个能成功，另一个拿到 false 由调用方转 409。
+pub async fn transition_agent_status(
+    db: &D1Database,
+    agent_id: &str,
+    from: &str,
+    to: &str,
+) -> AppResult<bool> {
+    let results = db
+        .batch(vec![
+            db.prepare("UPDATE agents SET status = ?1 WHERE id = ?2 AND status = ?3")
+                .bind(&[s(to), s(agent_id), s(from)])?,
+        ])
+        .await?;
+    let changes = results
+        .first()
+        .and_then(|r| r.meta().ok().flatten())
+        .and_then(|m| m.changes)
+        .unwrap_or(0);
+    Ok(changes == 1)
+}
+
+/// 账号是否有已支付订单（激活前置条件：未支付不得激活）。
+pub async fn account_has_paid_order(db: &D1Database, account_id: &str) -> AppResult<bool> {
+    #[derive(serde::Deserialize)]
+    struct Row {
+        ok: i64,
+    }
+    let row = db
+        .prepare("SELECT 1 AS ok FROM orders WHERE account_id = ?1 AND status = 'paid' LIMIT 1")
+        .bind(&[s(account_id)])?
+        .first::<Row>(None)
+        .await?;
+    Ok(row.map(|r| r.ok == 1).unwrap_or(false))
 }
 
 // ---- 事件索引 ----
@@ -288,14 +341,22 @@ pub async fn apply_credit_purchase(
     Ok(account.balance)
 }
 
-/// 本 tick 需唤醒的 agent：事件队列 + 目标到期 + 资源阈值（MVP：资源阈值子集）。
+/// 本 tick 需唤醒的 agent（并集去重，上限 500）：
+/// (a) 本 tick 有新事件的 actor（事件驱动）；
+/// (b) 状态为 active / idle 的分身（周期心跳）——没有 (b)，世界在无用户行动时
+///     会因「没事件 → 不唤醒 → 不产生事件」自举冻死。
+/// 注：热状态（能量）在 KV，D1 侧不可见，原「低能量唤醒」设想无法在此实现；
+/// 低能量恢复由 decision 在心跳唤醒后自行处理。`agents` 表即权威状态源，
+/// 孤儿表 `agent_state` 不参与唤醒判定。
 pub async fn find_wakeable_agents(db: &D1Database, tick: u64) -> AppResult<Vec<String>> {
-    // MVP：唤醒（a）本 tick 有新事件的 actor，（b）热状态能量低于阈值的 active 分身。
-    // 目标到期规则在 lifecycle/decision 成熟后并入。
     let rows: Vec<EventActorRow> = db
         .prepare(
-            "SELECT DISTINCT actor_id AS id FROM events_index \
-             WHERE tick >= ?1 AND actor_id IS NOT NULL LIMIT 500",
+            "SELECT id FROM ( \
+               SELECT DISTINCT actor_id AS id FROM events_index \
+                 WHERE tick >= ?1 AND actor_id IS NOT NULL \
+               UNION \
+               SELECT id FROM agents WHERE status IN ('active', 'idle') \
+             ) LIMIT 500",
         )
         .bind(&[n(tick as i64)])?
         .all()
