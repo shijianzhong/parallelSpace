@@ -6,7 +6,7 @@
 //! - 数值列（INTEGER）以 i64/f64 绑定，D1 经 JS 数字回传；
 //! - 多表写入一律走 D1Database::batch（单次往返、原子性）。
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use worker::{wasm_bindgen::JsValue, D1Database, D1Result};
 
 use crate::common::error::{AppError, AppResult};
@@ -337,16 +337,225 @@ pub async fn create_order(
 
 /// 清理过期 pending 订单（30 分钟，由 Cron 调用）。
 pub async fn expire_stale_orders(db: &D1Database, before_rfc3339: &str) -> AppResult<u64> {
-    let results = db
-        .batch(vec![
+    let results = batch_write(
+        db,
+        vec![
             db.prepare("UPDATE orders SET status = 'expired' WHERE status = 'pending' AND created_at < ?1")
                 .bind(&[s(before_rfc3339)])?,
-        ])
-        .await?;
+        ],
+    )
+    .await?;
     Ok(results
         .first()
         .and_then(|r| r.meta().ok().flatten())
         .and_then(|m| m.changes)
         .map(|c| c as u64)
         .unwrap_or(0))
+}
+
+// ---- 本体域注册表 / 版本索引（两段式发布，2026-10-22） ----
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DomainRow {
+    pub domain: String,
+    pub layer: String,
+    pub status: String,
+    pub description: Option<String>,
+    pub registered_by: String,
+    pub created_at: String,
+    pub activated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct OntologyVersionRow {
+    pub version: String,
+    pub published_at: String,
+    pub prior_version: Option<String>,
+    /// pending（提案未审）/ active（生效）/ superseded（被新版本取代）/ rolled_back（被回滚离开）
+    pub status: String,
+    pub proposed_by: Option<String>,
+    pub approved_by: Option<String>,
+}
+
+pub async fn domain_exists(db: &D1Database, domain: &str) -> AppResult<bool> {
+    #[derive(serde::Deserialize)]
+    struct Row {
+        ok: i64,
+    }
+    let row = db
+        .prepare("SELECT 1 AS ok FROM ontology_domains WHERE domain = ?1")
+        .bind(&[s(domain)])?
+        .first::<Row>(None)
+        .await?;
+    Ok(row.map(|r| r.ok == 1).unwrap_or(false))
+}
+
+pub async fn get_domain(db: &D1Database, domain: &str) -> AppResult<Option<DomainRow>> {
+    Ok(db
+        .prepare(
+            "SELECT domain, layer, status, description, registered_by, created_at, activated_at \
+             FROM ontology_domains WHERE domain = ?1",
+        )
+        .bind(&[s(domain)])?
+        .first::<DomainRow>(None)
+        .await?)
+}
+
+pub async fn list_domains(db: &D1Database) -> AppResult<Vec<DomainRow>> {
+    let rows: Vec<DomainRow> = db
+        .prepare(
+            "SELECT domain, layer, status, description, registered_by, created_at, activated_at \
+             FROM ontology_domains ORDER BY domain",
+        )
+        .all()
+        .await?
+        .results()?;
+    Ok(rows)
+}
+
+/// 注册新域（种子态）。domain_exists 前置检查，避免 D1 唯一冲突整批回滚成 500。
+pub async fn register_domain(
+    db: &D1Database,
+    domain: &str,
+    layer: &str,
+    description: Option<&str>,
+    registered_by: &str,
+) -> AppResult<()> {
+    if domain_exists(db, domain).await? {
+        return Err(AppError::Conflict(format!("domain {domain} already registered")));
+    }
+    db.prepare(
+        "INSERT INTO ontology_domains (domain, layer, status, description, registered_by, created_at) \
+         VALUES (?1, ?2, 'seed', ?3, ?4, ?5)",
+    )
+    .bind(&[
+        s(domain),
+        s(layer),
+        opt_s(description),
+        s(registered_by),
+        s(&crate::common::types::now_rfc3339()),
+    ])?
+    .run()
+    .await?;
+    Ok(())
+}
+
+pub async fn list_versions(db: &D1Database) -> AppResult<Vec<OntologyVersionRow>> {
+    let rows: Vec<OntologyVersionRow> = db
+        .prepare(
+            "SELECT version, published_at, prior_version, status, proposed_by, approved_by \
+             FROM ontology_versions ORDER BY published_at DESC, version DESC",
+        )
+        .all()
+        .await?
+        .results()?;
+    Ok(rows)
+}
+
+pub async fn get_version(db: &D1Database, version: &str) -> AppResult<Option<OntologyVersionRow>> {
+    Ok(db
+        .prepare(
+            "SELECT version, published_at, prior_version, status, proposed_by, approved_by \
+             FROM ontology_versions WHERE version = ?1",
+        )
+        .bind(&[s(version)])?
+        .first::<OntologyVersionRow>(None)
+        .await?)
+}
+
+/// 某版本包含的域清单（审批事件负载 + 激活种子域用）。
+pub async fn get_version_domains(db: &D1Database, version: &str) -> AppResult<Vec<String>> {
+    #[derive(serde::Deserialize)]
+    struct Row {
+        domain: String,
+    }
+    let rows: Vec<Row> = db
+        .prepare("SELECT domain FROM ontology_version_domains WHERE version = ?1 ORDER BY domain")
+        .bind(&[s(version)])?
+        .all()
+        .await?
+        .results()?;
+    Ok(rows.into_iter().map(|r| r.domain).collect())
+}
+
+/// 落 pending 版本行 + 版本↔域关系（批量，单次往返）。
+pub async fn insert_pending_version(
+    db: &D1Database,
+    version: &str,
+    prior_version: &str,
+    proposed_by: &str,
+    domains: &[String],
+) -> AppResult<()> {
+    let mut stmts = vec![db
+        .prepare(
+            "INSERT INTO ontology_versions (version, published_at, prior_version, status, proposed_by) \
+             VALUES (?1, ?2, ?3, 'pending', ?4)",
+        )
+        .bind(&[
+            s(version),
+            s(&crate::common::types::now_rfc3339()),
+            s(prior_version),
+            s(proposed_by),
+        ])?];
+    for d in domains {
+        stmts.push(
+            db.prepare("INSERT OR IGNORE INTO ontology_version_domains (version, domain) VALUES (?1, ?2)")
+                .bind(&[s(version), s(d)])?,
+        );
+    }
+    batch_write(db, stmts).await?;
+    Ok(())
+}
+
+/// 审批：pending → active；同批次把此前的 active 版本置 superseded、
+/// 把本版本涉及的 seed 域提升为 active（随种子激活）。
+/// 返回 false 表示版本不存在或不在 pending（调用方转 409）。
+pub async fn approve_version_row(db: &D1Database, version: &str, approved_by: &str) -> AppResult<bool> {
+    let now = crate::common::types::now_rfc3339();
+    let results = batch_write(
+        db,
+        vec![
+            db.prepare(
+                "UPDATE ontology_versions SET status = 'active', approved_by = ?1 \
+                 WHERE version = ?2 AND status = 'pending'",
+            )
+            .bind(&[s(approved_by), s(version)])?,
+            db.prepare(
+                "UPDATE ontology_versions SET status = 'superseded' \
+                 WHERE status = 'active' AND version <> ?1",
+            )
+            .bind(&[s(version)])?,
+            db.prepare(
+                "UPDATE ontology_domains SET status = 'active', activated_at = ?1 \
+                 WHERE status = 'seed' AND domain IN \
+                 (SELECT domain FROM ontology_version_domains WHERE version = ?2)",
+            )
+            .bind(&[s(&now), s(version)])?,
+        ],
+    )
+    .await?;
+    let changes = results
+        .first()
+        .and_then(|r| r.meta().ok().flatten())
+        .and_then(|m| m.changes)
+        .unwrap_or(0);
+    Ok(changes == 1)
+}
+
+/// 回滚时的版本行状态互换：被离开的 active → rolled_back，目标 → active。
+pub async fn swap_active_version(db: &D1Database, from_version: &str, to_version: &str) -> AppResult<()> {
+    batch_write(
+        db,
+        vec![
+            db.prepare(
+                "UPDATE ontology_versions SET status = 'rolled_back' \
+                 WHERE version = ?1 AND status = 'active'",
+            )
+            .bind(&[s(from_version)])?,
+            db.prepare("UPDATE ontology_versions SET status = 'active' WHERE version = ?1")
+                .bind(&[s(to_version)])?,
+        ],
+    )
+    .await?;
+    Ok(())
 }

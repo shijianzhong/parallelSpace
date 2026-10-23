@@ -55,12 +55,24 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/api/payment/confirm", |req, ctx| async move {
             api::into_router_result(api::payment::confirm(req, ctx).await)
         })
-        // 治理管理
+        // 治理管理：域注册表 + 两段式发布（提案 pending → 审批 active）+ 回滚
         .post_async("/api/admin/ontology/publish", |req, ctx| async move {
             api::into_router_result(api::admin::publish_ontology(req, ctx).await)
         })
         .post_async("/api/admin/ontology/rollback", |req, ctx| async move {
             api::into_router_result(api::admin::rollback_ontology(req, ctx).await)
+        })
+        .post_async("/api/admin/ontology/domains", |req, ctx| async move {
+            api::into_router_result(api::admin::register_domain(req, ctx).await)
+        })
+        .get_async("/api/admin/ontology/domains", |req, ctx| async move {
+            api::into_router_result(api::admin::list_domains(req, ctx).await)
+        })
+        .get_async("/api/admin/ontology/versions", |req, ctx| async move {
+            api::into_router_result(api::admin::list_versions(req, ctx).await)
+        })
+        .post_async("/api/admin/ontology/versions/:version/approve", |req, ctx| async move {
+            api::into_router_result(api::admin::approve_ontology(req, ctx).await)
         });
 
     router.run(req, env).await

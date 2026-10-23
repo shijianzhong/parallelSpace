@@ -1,6 +1,9 @@
-//! 治理管理接口：本体版本发布 / 回滚（AGENTS.md §7.8）。
+//! 治理管理接口：域注册 / 本体版本发布（提案）/ 审批 / 回滚（AGENTS.md §7.8）。
 //!
 //! admin 校验 + 审计；L0 变更显式拒绝；发布不覆盖旧版本目录。
+//! 两段式发布：publish 落 pending（提案），approve 才生效——未审批的版本
+//! 不写 KV、不进 history，OntologyRouter 路由不到。域注册表替代原硬编码
+//! 文件名白名单：新域（如 transport）注册为 L1/L2 种子后即可提案发布。
 
 use serde::Deserialize;
 use worker::{Response, Result, RouteContext};
@@ -8,6 +11,7 @@ use worker::{Response, Result, RouteContext};
 use crate::api::json_body;
 use crate::common::error::{AppError, AppResult};
 use crate::governance::ontology_admin;
+use crate::storage::d1;
 
 #[derive(Debug, Deserialize)]
 pub struct PublishInput {
@@ -15,7 +19,9 @@ pub struct PublishInput {
     /// 本次变更涉及的概念 IRI（L0 名单命中即拒绝）
     pub changed_concepts: Vec<String>,
     pub prior_version: String,
-    /// turtle 文件内容（MVP 只收 soc/gov/econ 三个；文件名固定，防目录穿越）
+    /// 提案者（治理员，或未来的 LLM/agent 提案执行者）；审批前版本不生效
+    pub proposed_by: String,
+    /// turtle 文件内容；文件名必须是已注册域的 {domain}.ttl
     pub turtle_files: Vec<TurtleFile>,
 }
 
@@ -31,12 +37,17 @@ pub struct RollbackInput {
     pub reason: String,
 }
 
-/// 文件名白名单：只允许已知本体文件名，防路径穿越写坏 R2。
-fn check_file_name(name: &str) -> bool {
-    matches!(
-        name,
-        "soc.ttl" | "gov.ttl" | "econ.ttl" | "geo.ttl" | "time.ttl"
-    )
+#[derive(Debug, Deserialize)]
+pub struct RegisterDomainInput {
+    pub domain: String,
+    /// 'L1' | 'L2'；'L0' 一律拒绝（宪法不可注册）
+    pub layer: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ApproveInput {
+    pub approved_by: String,
 }
 
 fn check_admin(req: &worker::Request, ctx: &RouteContext<()>) -> Result<()> {
@@ -60,6 +71,7 @@ fn check_admin(req: &worker::Request, ctx: &RouteContext<()>) -> Result<()> {
     Ok(())
 }
 
+/// 第一段·提案：落 pending，不生效。
 pub async fn publish_ontology(mut req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
     check_admin(&req, &ctx).map_err(|_| AppError::Unauthorized)?;
     let input: PublishInput = json_body(&mut req).await?;
@@ -67,14 +79,6 @@ pub async fn publish_ontology(mut req: worker::Request, ctx: RouteContext<()>) -
     // L0 宪法层变更显式拒绝
     if ontology_admin::touches_l0(&input.changed_concepts) {
         return Err(AppError::Forbidden);
-    }
-    for f in &input.turtle_files {
-        if !check_file_name(&f.name) {
-            return Err(AppError::InvalidInput(format!(
-                "unknown ontology file: {}",
-                f.name
-            )));
-        }
     }
 
     let env = ctx.env.clone();
@@ -88,13 +92,27 @@ pub async fn publish_ontology(mut req: worker::Request, ctx: RouteContext<()>) -
         &input.version,
         files,
         &input.prior_version,
-        "admin",
+        &input.proposed_by,
     )
     .await?;
 
     Ok(Response::from_json(&serde_json::json!({
-        "published": input.version,
+        "proposed": input.version,
+        "status": "pending",
         "prior_version": input.prior_version,
+    }))?)
+}
+
+/// 第二段·审批：pending → active，写 KV ontology:version，激活 seed 域。
+pub async fn approve_ontology(mut req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    check_admin(&req, &ctx).map_err(|_| AppError::Unauthorized)?;
+    let version = crate::api::require_param(&ctx, "version")?;
+    let input: ApproveInput = json_body(&mut req).await?;
+    let env = ctx.env.clone();
+    ontology_admin::approve_version(&env, &version, &input.approved_by).await?;
+    Ok(Response::from_json(&serde_json::json!({
+        "approved": version,
+        "status": "active",
     }))?)
 }
 
@@ -106,4 +124,40 @@ pub async fn rollback_ontology(mut req: worker::Request, ctx: RouteContext<()>) 
     Ok(Response::from_json(&serde_json::json!({
         "rolled_back_to": input.target_version,
     }))?)
+}
+
+/// 注册新本体域（L1/L2 种子）。L0 与保留名一律拒绝。
+pub async fn register_domain(mut req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    check_admin(&req, &ctx).map_err(|_| AppError::Unauthorized)?;
+    let input: RegisterDomainInput = json_body(&mut req).await?;
+    let env = ctx.env.clone();
+    ontology_admin::register_domain(
+        &env,
+        &input.domain,
+        &input.layer,
+        input.description.as_deref(),
+        "admin",
+    )
+    .await?;
+    Ok(Response::from_json(&serde_json::json!({
+        "registered": input.domain,
+        "layer": input.layer,
+        "status": "seed",
+    }))?)
+}
+
+/// 域注册表一览（含种子/激活/退役状态）。
+pub async fn list_domains(req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    check_admin(&req, &ctx).map_err(|_| AppError::Unauthorized)?;
+    let db = ctx.env.d1("DB")?;
+    let rows = d1::list_domains(&db).await?;
+    Ok(Response::from_json(&rows)?)
+}
+
+/// 本体版本一览（pending/active/superseded/rolled_back）。
+pub async fn list_versions(req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    check_admin(&req, &ctx).map_err(|_| AppError::Unauthorized)?;
+    let db = ctx.env.d1("DB")?;
+    let rows = d1::list_versions(&db).await?;
+    Ok(Response::from_json(&rows)?)
 }

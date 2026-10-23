@@ -1,8 +1,8 @@
-# Earth Soc Sim · 地球社会模拟
+# parallelSpace · 平行空间
 
-> OWL 本体驱动的多智能体社会模拟 —— 基于真实地球地理数据，分身进入由本体约束的共享社会语义空间，自主行动、交易、结盟、立法、演化；中央只做**校验、仲裁、审计**。
+> OWL 本体驱动的多智能体社会模拟（内部代号 Earth Soc Sim）—— **agent 是唯一主体**，随时间自主行动、交互、演化；衍生出什么完全开放、未知，**不对标人类当前社会**。中央只做**校验、仲裁、审计**。
 
-[English](./README.en.md) · 编码约束见 [`AGENTS.md`](./AGENTS.md)
+[English](./README.en.md) · 编码约束见 [`AGENTS.md`](./AGENTS.md) · 设计定调见 [`l0-constitution/DESIGN.md`](./l0-constitution/DESIGN.md)
 
 ---
 
@@ -34,8 +34,17 @@
 1. **本体即宪法** —— OWL 管约束，JSON 只传输。状态变更先过本体校验。
 2. **LLM 提案、规则守门** —— LLM 可提议行动，但落库前必须经确定性规则引擎审批。
 3. **状态持久、计算离散** —— 世界状态落在 D1/KV/R2，tick 式推进，计算与存储分离。
-4. **制度先于组织先于领导** —— 没有宪章（Charter）就没有组织，没有组织就没有领导。
-5. **本体分层进化** —— L0 不可变（宪法层）/ L1 治理（需治理流程）/ L2 自由（玩家可贡献）。
+4. **秩序需共识基础（机制约束，非演进路径）** —— 共识是互动的机制前提，但**不预设** agent 必走「制度 → 组织 → 领导」的人类式演进路径。
+5. **本体分层进化** —— L0 不可变（宪法层）/ L1 治理（需治理流程）/ L2 自由（可贡献、可涌现）。
+
+**存在论约定（2026-10 定调，最高优先级）：**
+
+- parallelSpace 是**平行空间**：agent 为唯一主体，衍生出什么**完全开放、未知**；
+- **不对标、不预设人类当前社会**——人类的一切（货币/公司/法律/交通/雇佣…）只是特定约束下的局部最优解，**不是蓝本**；
+- 该系统**可能比当前社会发展得更快、更先进，或走向完全不同的结构**；架构要能容纳尚未命名/尚未想象的社会形态；
+- 因此 L0 宪法层保持**中立与最小化**，人类制度模板一律从 L0/L1 **降级为 L2 涌现候选**，且仅是「可能路径之一」。
+
+>  [`l0-constitution/core.ttl`](./l0-constitution/core.ttl) 是这一定调的落地草案（v0.1.0-draft，独立目录、未进构建）：9 个中立原语（Agent / Instant·tick / Event / Action·零枚举 / Entity / Relation / Observation / Location·仅可指称 / ChangeProposal），刻意**不含**距离、移动、交通、组织、契约、货币——连 `Move` 都不预声明，若社会发展出移动，由它自己提案。
 
 ---
 
@@ -89,7 +98,8 @@ earth-soc-sim/
 ├── .cargo/config.toml     # +reference-types（构建坑修复，见下）
 ├── ontology/              # OWL 2 DL Turtle：soc / gov / econ / geo / time
 ├── shacl/                 # L2 形状：person-card / charter / transaction
-├── migrations/            # D1 初始化 SQL（0001_init.sql，15 表）
+├── l0-constitution/       # L0 中立宪法草案（core.ttl + DESIGN.md，未进构建）
+├── migrations/            # D1 SQL：0001_init（15 表）/ 0002_ontology_domains
 ├── scripts/               # smoke.sh（端到端）/ wasm-bindgen-reftypes.sh
 └── src/
     ├── lib.rs             # fetch 入口 + 路由
@@ -147,15 +157,19 @@ npx wrangler d1 migrations apply earth-soc-sim-sandbox-db --local
 npx wrangler dev --local --port 8787
 ```
 
-### 5. 端到端冒烟（另开终端，26 项断言）
+### 5. 端到端冒烟（另开终端，50 项断言）
 
 ```bash
 bash scripts/smoke.sh
 ```
 
+冒烟分 10 节：注册 → 下单 → 支付入账（幂等）→ SHACL → 查询 → 地图 →
+**本体治理（域注册表 + pending → approve 两段式发布 + 回滚状态机）**。
+脚本可重复运行（治理段用运行期唯一域名/版本号，不依赖干净库）。
+
 ---
 
-## 必须知道的两个构建坑
+## 必须知道的三个坑
 
 1. **`externref table required for catch wrappers`**
    `worker-build` 会带 `--force-enable-abort-handler`，这要求 wasm 里有 externref 表；
@@ -165,6 +179,10 @@ bash scripts/smoke.sh
 
 2. **`wrangler.toml` 的 `main` 必须指向 `build/worker/shim.mjs`**，不是 `build/worker.js`。
    写错会 404 一片。
+
+3. **workers-rs 的 KV 存取不对称**：`put(String)` 走「裸字符串」存储路径（无 JSON 引号），
+   而 `.json::<String>()` 读取时按 JSON 解析——裸版本号会直接抛错。**同类型存取也要用
+   `text()` 配对**；`Vec<String>` 等复合类型才用 `json()`。这个潜伏 bug 曾被新冒烟首次踩响。
 
 ---
 
@@ -177,15 +195,19 @@ bash scripts/smoke.sh
 | 编译（dev） | `cargo check --target wasm32-unknown-unknown` | 0 error / 0 warning |
 | 编译（release） | `cargo build --release --target wasm32-unknown-unknown` | Finished |
 | Clippy（含测试目标） | `cargo clippy --target wasm32-unknown-unknown --all-targets` | 0 warning |
-| 单元测试 | `cargo test --target wasm32-unknown-unknown` | **80 passed / 0 failed** |
+| 单元测试 | `cargo test --target wasm32-unknown-unknown` | **85 passed / 0 failed** |
 | 迁移 SQL | `sqlite3 x.db < migrations/0001_init.sql` | 15 表，`foreign_key_check` / `integrity_check` ok |
+| 迁移 SQL（0002） | `wrangler d1 migrations apply <db> --local` | 域注册表 + versions 状态列 + 五域种子就位 |
 | Workers 打包 | `worker-build --release` | wasm + shim.mjs 产出成功 |
 | 本地运行时 | `wrangler dev --local` | 10 个绑定全部就绪，`/health` 200 |
-| 端到端冒烟 | `bash scripts/smoke.sh` | **26 通过 / 0 失败** |
+| 端到端冒烟 | `bash scripts/smoke.sh` | **50 通过 / 0 失败**（连跑两次均绿） |
 
 冒烟覆盖：注册 → 下单（服务端定价、忽略客户端金额、无账号 404）→ admin 令牌 401 →
 金额二次核对 409 → 入账 500 积分 → 幂等重放（余额不变）→ 同一流水号复用 409 →
-SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 FeatureCollection。
+SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 FeatureCollection →
+域注册（seed / 409 重复 / L0 保留域 403 / 非法层 400 / 路径穿越 400）→
+提案落 pending（未审批不写 KV、不生效）→ 审批激活（版本 + seed 域联动）→
+重复审批 409 → 回滚状态机（rolled_back / 目标须已审批）。
 
 测试走 `wasm-bindgen-test-runner` 的 **node 驱动**，不需要浏览器 / chromedriver。
 
@@ -212,11 +234,18 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
 - 本体资产落盘 + 3 处公理修正 + `geo.ttl` 前缀补全
 - SHACL L2 引擎：内嵌形状解析、受限约束集、`rdfs:subClassOf` 传递闭包（含环状继承终止）
 - reasonable OWL 2 RL 封装（推理 / 一致性）
+- **本体治理两段式发布**：`POST /api/admin/ontology/publish` 落 **pending**（不写 KV、不生效）→
+  `POST /api/admin/ontology/versions/{v}/approve` 审批后才 active 并切换 KV；回滚仅限已审批目标，
+  版本行状态机 `pending → active → superseded / rolled_back`
+- **域注册表**（`ontology_domains` 表）：替代原硬编码文件名白名单，新域（如 transport）先注册后使用；
+  防目录穿越；`core` 等 L0 保留域与 L0 层注册一律 403
+- **种子降级**：soc/gov/econ/geo/time 五域注册为 **L2 seed**（存在论纠偏的落地：人类制度模板从宪法层降级为涌现候选）
 - 支付：`POST /api/payment/order` 下单（服务端定价，客户端仅选套餐）+ 幂等入账 `confirm_payment`
 - Cron tick + Queue 消费、KV 热状态/配额/缓存、R2 事件日志
-- 注册 / 查询 / 行动 / 组织 / 地图 / 下单 / 支付确认 / 本体发布回滚 API
+- 注册 / 查询 / 行动 / 组织 / 地图 / 下单 / 支付确认 / 本体域注册 / 提案 / 审批 / 回滚 API
 - 错误响应统一 JSON `{"error":"<CODE>","message":"..."}`，5xx 不外泄内部细节
-- 48 个 Rust 文件、80 个单测、26 项端到端断言
+- 49 个 Rust 文件、85 个单测、50 项端到端断言
+- L0 中立宪法草案 `l0-constitution/core.ttl`（rdflib 实测：140 三元组、9 原语、零 imports、零人类模板泄漏）
 
 ---
 
@@ -224,7 +253,7 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
 
 **MVP 有意留白：**
 
-- LLM 上游未接（`LLM_API_URL` 空时降级规则路径）
+- LLM 上游未接（`LLM_API_URL` 空时降级规则路径）——「概念化」执行者缺位，交通/货币等新概念**不会自动生成**，只能治理员手动提案
 - L3 本体引擎未接（`ONTOLOGY_ENGINE_URL` 空时 L2 结果即最终结果）
 - oxigraph 未引入（M2 实例层入 RDF 后再评估）
 - Durable Objects WebSocket 广播占位
@@ -232,13 +261,18 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
   `next: payment_required` 只是提示
 - 分身支付后仍是 `created` 状态，`created → active` 的迁移入口（需 SHACL 校验 PersonCard）
   尚未接到 API，`lifecycle::can_transition` 已备好规则
+- L0 中立宪法仍是**草案**（`l0-constitution/` 未进构建）；`core.ttl` 尚未替换现有五域、
+  `version.rs` 的 L0 保护清单尚未扩为 core 全量
+- 审批目前仍由 admin token 持有者扮演（`approved_by` 为入参但无独立治理身份），两段式的**人**是真实的、**自动化**不是
 - 冒烟跑在 miniflare 本地态，**未在真实 Cloudflare 账号（Workers Paid）上部署验证**；
   D1 事务与 Queues 的线上语义（尤其是 batch 内唯一索引冲突的表现）以真实环境为准
 
 **Roadmap：**
 
+- [ ] `l0-constitution/core.ttl` 正式落地为 L0（soc/gov/econ 退场为 L2 参考域）
 - [ ] 接入真实 Cloudflare Workers Paid 部署并跑通 D1/Queues 线上语义
 - [ ] `created → active` 分身激活 API（SHACL 校验 PersonCard）
+- [ ] LLM 概念化最小闭环：从 agent 行为模式发现未命名模式 → 生成 Turtle 提案 → 过守门流水线
 - [ ] LLM 网关与 L3 本体引擎对接
 - [ ] MapLibre 前端（M2）与 WebSocket 实时广播
 - [ ] oxigraph 实例层评估
@@ -259,9 +293,10 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
 ## 文档索引
 
 - [`AGENTS.md`](./AGENTS.md) —— 编码强制约束（每次 AI 生成代码前必读）
+- [`l0-constitution/DESIGN.md`](./l0-constitution/DESIGN.md) —— L0 中立宪法草案：准入测试、刻意排除清单、元宪法流水线
 - `t.md`（仓库外）—— PRD + SAD + Coding Prompt 完整文档 v1.0
-- [`ontology/`](./ontology/) —— OWL 2 DL Turtle + SHACL 形状
-- [`migrations/`](./migrations/) —— D1 初始化 SQL（15 表，含 FK 与完整性约束）
+- [`ontology/`](./ontology/) —— OWL 2 DL Turtle + SHACL 形状（注意：soc/gov/econ 已定位为 L2 seed，非宪法）
+- [`migrations/`](./migrations/) —— D1 SQL（16 表 + 域注册表，含 FK 与完整性约束）
 
 ---
 

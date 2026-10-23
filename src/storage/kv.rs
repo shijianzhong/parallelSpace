@@ -90,8 +90,14 @@ pub async fn kill_switch_on(kv: &KvStore) -> AppResult<bool> {
 }
 
 /// 当前本体版本（KV ontology:version）。
+///
+/// 坑（2026-10-22 rollback 500 的根因）：`put(String)` 经 `ToRawKvValue` 存的是
+/// **裸字符串**（无 JSON 引号，见 worker-0.8.7 kv/mod.rs 的 `impl for str`），
+/// 而 `.json::<String>()` 会让 JS 侧对裸串做 `JSON.parse` 直接抛错。
+/// 数值/布尔能碰巧工作（"42"/"true" 是合法 JSON），字符串必须用 `text()` 读。
+/// 写读两侧就此对称；本函数在 rollback 接线前从未被调用，bug 一直潜伏。
 pub async fn get_ontology_version(kv: &KvStore) -> AppResult<Option<String>> {
-    Ok(kv.get("ontology:version").json::<String>().await?)
+    Ok(kv.get("ontology:version").text().await?)
 }
 
 /// 本体版本历史（KV ontology:version:history，只追加 JSON 数组）。

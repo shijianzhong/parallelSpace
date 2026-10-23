@@ -56,6 +56,18 @@ gov:RolledBack a owl:Class ;
     rdfs:subClassOf soc:Event ;
     rdfs:comment "回滚事件" .
 
+gov:VersionProposed a owl:Class ;
+    rdfs:subClassOf soc:Event ;
+    rdfs:comment "本体版本提案：pending 态，未生效（两段式发布第一段）" .
+
+gov:VersionApproved a owl:Class ;
+    rdfs:subClassOf soc:Event ;
+    rdfs:comment "本体版本审批通过：生效并写 KV ontology:version（两段式发布第二段）" .
+
+gov:DomainRegistered a owl:Class ;
+    rdfs:subClassOf soc:Event ;
+    rdfs:comment "新本体域注册：L1/L2 种子态，首次审批发布时激活" .
+
 ############################################################
 # 属性
 ############################################################

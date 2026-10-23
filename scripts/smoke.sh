@@ -131,6 +131,76 @@ chk "GET 不存在的 agent = 404" 404 "$(getcode "$BASE/api/agent/nope")"
 MAP=$(curl -s --max-time 10 "$BASE/api/map/agents")
 chk "地图返回 FeatureCollection" FeatureCollection "$(echo "$MAP" | get type)"
 
+echo "== 10. 本体治理：域注册表 + 两段式发布（pending → approve）"
+# 域注册表替代原硬编码文件名白名单；未审批的版本不写 KV、不生效。
+# 域名每次运行唯一（tr-<run_id>），让脚本可重复跑而不被上一轮的注册挡下。
+DOM="tr-$RUN_ID"
+P="{\"domain\":\"$DOM\",\"layer\":\"L2\",\"description\":\"交通方式涌现候选（L2）\"}"
+REG_D=$(post /api/admin/ontology/domains "$P" -H "x-admin-token: $ADMIN_TOKEN")
+chk "注册新域 = seed" seed "$(echo "$REG_D" | get status)"
+chk "重复注册 = 409" 409 "$(post_code /api/admin/ontology/domains "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+P="{\"domain\":\"core\",\"layer\":\"L2\"}"
+chk "L0 保留域 core = 403" 403 "$(post_code /api/admin/ontology/domains "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+P="{\"domain\":\"whatever\",\"layer\":\"L0\"}"
+chk "注册 L0 层 = 403" 403 "$(post_code /api/admin/ontology/domains "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+P="{\"domain\":\"bad\",\"layer\":\"L9\"}"
+chk "非法层 = 400" 400 "$(post_code /api/admin/ontology/domains "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+P="{\"domain\":\"../soc\",\"layer\":\"L2\"}"
+chk "路径穿越域名 = 400" 400 "$(post_code /api/admin/ontology/domains "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+
+# migration 0002 的五域种子（存在论纠偏：soc/gov/econ 降级 L2 seed）
+DOMS=$(curl -s --max-time 10 "$BASE/api/admin/ontology/domains" -H "x-admin-token: $ADMIN_TOKEN")
+chk "soc 域已注册为 seed" seed "$(echo "$DOMS" | python3 -c "import sys,json;print([d['status'] for d in json.load(sys.stdin) if d['domain']=='soc'][0])" 2>/dev/null)"
+
+# 提案 payload 由 python 组（ttl 里有引号，不手写 JSON）
+TTL_DIR2=$(mktemp -d)
+cat > "$TTL_DIR2/$DOM.ttl" <<'TTL'
+@prefix core: <http://parallelspace.org/ontology/core#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+core:TransportMode a owl:Class .
+TTL
+mkpub() { python3 -c 'import json,os;rdf=open(os.environ["RDF_FILE"]).read();print(json.dumps({"version":os.environ["VER"],"prior_version":os.environ["PRIOR"],"proposed_by":"admin","changed_concepts":[],"turtle_files":[{"name":os.environ["FNAME"],"content":rdf}]}))'; }
+
+V1="smk1-$RUN_ID"
+PUB=$(post /api/admin/ontology/publish "$(VER="$V1" PRIOR="1.0.0" FNAME="$DOM.ttl" RDF_FILE="$TTL_DIR2/$DOM.ttl" mkpub)" -H "x-admin-token: $ADMIN_TOKEN")
+chk "提案落 pending（未生效）" pending "$(echo "$PUB" | get status)"
+P='{"version":"x","prior_version":"1.0.0","changed_concepts":[],"turtle_files":[]}'
+chk "缺 proposed_by = 400" 400 "$(post_code /api/admin/ontology/publish "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+chk "未注册域文件 = 400" 400 "$(post_code /api/admin/ontology/publish "$(VER="$V1" PRIOR="1.0.0" FNAME="nosuch.ttl" RDF_FILE="$TTL_DIR2/$DOM.ttl" mkpub)" -H "x-admin-token: $ADMIN_TOKEN")"
+P="$(python3 -c 'import json;print(json.dumps({"version":"zz","prior_version":"1.0.0","proposed_by":"admin","changed_concepts":["http://soc.example/ontology#Agent"],"turtle_files":[]}))')"
+chk "L0 概念变更 = 403" 403 "$(post_code /api/admin/ontology/publish "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+chk "重复提案同版本 = 409" 409 "$(post_code /api/admin/ontology/publish "$(VER="$V1" PRIOR="1.0.0" FNAME="$DOM.ttl" RDF_FILE="$TTL_DIR2/$DOM.ttl" mkpub)" -H "x-admin-token: $ADMIN_TOKEN")"
+
+VERS=$(curl -s --max-time 10 "$BASE/api/admin/ontology/versions" -H "x-admin-token: $ADMIN_TOKEN")
+chk "审批前 V1 = pending" pending "$(echo "$VERS" | python3 -c "import sys,json;print([v['status'] for v in json.load(sys.stdin) if v['version']=='$V1'][0])" 2>/dev/null)"
+
+# 审批 → active；seed 域随激活
+P="{\"approved_by\":\"governor\"}"
+APR=$(post "/api/admin/ontology/versions/$V1/approve" "$P" -H "x-admin-token: $ADMIN_TOKEN")
+chk "审批通过 = active" active "$(echo "$APR" | get status)"
+VERS=$(curl -s --max-time 10 "$BASE/api/admin/ontology/versions" -H "x-admin-token: $ADMIN_TOKEN")
+chk "审批后 V1 = active" active "$(echo "$VERS" | python3 -c "import sys,json;print([v['status'] for v in json.load(sys.stdin) if v['version']=='$V1'][0])" 2>/dev/null)"
+DOMS=$(curl -s --max-time 10 "$BASE/api/admin/ontology/domains" -H "x-admin-token: $ADMIN_TOKEN")
+chk "新域被激活" active "$(echo "$DOMS" | python3 -c "import sys,json;print([d['status'] for d in json.load(sys.stdin) if d['domain']=='$DOM'][0])" 2>/dev/null)"
+chk "重复审批 = 409" 409 "$(post_code "/api/admin/ontology/versions/$V1/approve" "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+chk "审批不存在的版本 = 400" 400 "$(post_code "/api/admin/ontology/versions/nope/approve" "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+
+# 回滚：V2 审批后回滚到 V1，版本行状态互换
+V2="smk2-$RUN_ID"
+PUB2=$(post /api/admin/ontology/publish "$(VER="$V2" PRIOR="$V1" FNAME="$DOM.ttl" RDF_FILE="$TTL_DIR2/$DOM.ttl" mkpub)" -H "x-admin-token: $ADMIN_TOKEN")
+chk "V2 提案落 pending" pending "$(echo "$PUB2" | get status)"
+APR2=$(post "/api/admin/ontology/versions/$V2/approve" "$P" -H "x-admin-token: $ADMIN_TOKEN")
+chk "V2 审批通过" active "$(echo "$APR2" | get status)"
+P="{\"target_version\":\"$V1\",\"reason\":\"smoke rollback\"}"
+RB=$(post /api/admin/ontology/rollback "$P" -H "x-admin-token: $ADMIN_TOKEN")
+chk "回滚到 V1" "$V1" "$(echo "$RB" | get rolled_back_to)"
+VERS=$(curl -s --max-time 10 "$BASE/api/admin/ontology/versions" -H "x-admin-token: $ADMIN_TOKEN")
+chk "V2 = rolled_back" rolled_back "$(echo "$VERS" | python3 -c "import sys,json;print([v['status'] for v in json.load(sys.stdin) if v['version']=='$V2'][0])" 2>/dev/null)"
+chk "V1 重新 active" active "$(echo "$VERS" | python3 -c "import sys,json;print([v['status'] for v in json.load(sys.stdin) if v['version']=='$V1'][0])" 2>/dev/null)"
+P="{\"target_version\":\"never-approved\",\"reason\":\"x\"}"
+chk "回滚到未审批版本 = 400" 400 "$(post_code /api/admin/ontology/rollback "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+rm -rf "$TTL_DIR2"
+
 echo
 echo "结果：$pass 通过 / $fail 失败"
 [ "$fail" -eq 0 ]

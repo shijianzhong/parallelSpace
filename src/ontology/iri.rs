@@ -40,6 +40,12 @@ pub const EVENT: &str = "http://soc.example/ontology#Event";
 pub const RELATIONSHIP: &str = "http://soc.example/ontology#Relationship";
 pub const CREDIT_PURCHASED: &str = "http://soc.example/econ/ontology#CreditPurchased";
 pub const ROLLED_BACK: &str = "http://soc.example/gov/ontology#RolledBack";
+/// 两段式发布：提案（pending，未生效）。
+pub const VERSION_PROPOSED: &str = "http://soc.example/gov/ontology#VersionProposed";
+/// 两段式发布：审批通过（生效）。
+pub const VERSION_APPROVED: &str = "http://soc.example/gov/ontology#VersionApproved";
+/// 新本体域注册（L1/L2 种子）。
+pub const DOMAIN_REGISTERED: &str = "http://soc.example/gov/ontology#DomainRegistered";
 /// 决策循环事件类型（soc.ttl 中声明为 soc:Event 子类）。
 pub const AGENT_DECISION: &str = "http://soc.example/ontology#AgentDecision";
 

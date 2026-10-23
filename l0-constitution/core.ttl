@@ -1,0 +1,218 @@
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix core: <http://parallelspace.org/ontology/core#> .
+
+<http://parallelspace.org/ontology/core>
+    a owl:Ontology ;
+    owl:versionIRI <http://parallelspace.org/ontology/core/v0.1.0-draft> ;
+    owl:versionInfo "0.1.0-draft" ;
+    dcterms:title "parallelSpace L0 Neutral Constitution"@en ,
+                  "parallelSpace L0 中立宪法（草案）"@zh ;
+    core:layer "L0" ;
+    core:amendable false ;
+    rdfs:comment """
+        L0 是 parallelSpace 的宪法层，只保留一条准入测试下的幸存者：
+        去掉它，agent 是否还能作为 agent 存在、互动是否还可能？
+        物理与互动的必然 -> 进 L0；人类既有社会制度的模板 -> 只能是 L2 涌现候选。
+
+        本文件刻意不 import 任何现有域本体（soc/gov/econ/geo/time 全部不 import），
+        以确保 L0 不承载任何人类社会的预设。设计说明见同目录 DESIGN.md。
+    """@zh ;
+    rdfs:seeAlso <DESIGN.md> .
+
+############################################################
+# 元属性
+############################################################
+
+core:layer a owl:AnnotationProperty ;
+    rdfs:range xsd:string ;
+    rdfs:comment "本体分层标记：L0 宪法（不可改）/ L1 治理 / L2 自由涌现。"@zh .
+
+core:amendable a owl:AnnotationProperty ;
+    rdfs:range xsd:boolean ;
+    rdfs:comment "是否允许被 ChangeProposal 修改。L0 恒为 false。"@zh .
+
+############################################################
+# 根类
+############################################################
+
+core:Thing a owl:Class ;
+    rdfs:label "Thing"@en , "可指称者"@zh ;
+    rdfs:comment "一切可指称者。agent 群体后续发明的任何概念，最终都是 Thing 的子类或实例——但发明它们不是 L0 的事。"@zh .
+
+############################################################
+# 1. Agent —— 唯一主体
+############################################################
+
+core:Agent a owl:Class ;
+    rdfs:subClassOf core:Thing ;
+    rdfs:label "Agent"@en , "智能体"@zh ;
+    rdfs:comment "唯一主体。空间中除 Agent 及其互动产物之外，没有任何预设实体。"@zh .
+
+############################################################
+# 2. Time —— 离散 tick，只提供排序
+############################################################
+
+core:Instant a owl:Class ;
+    rdfs:subClassOf core:Thing ;
+    rdfs:label "Instant"@en , "时刻"@zh ;
+    rdfs:comment "离散时间点（tick）。时间只提供排序，不提供任何历法、周期、时区语义——历法是涌现候选。"@zh .
+
+core:tick a owl:DatatypeProperty , owl:FunctionalProperty ;
+    rdfs:domain core:Event ;
+    rdfs:range xsd:integer ;
+    rdfs:comment "事件发生的 tick。"@zh .
+
+core:duration a owl:DatatypeProperty ;
+    rdfs:domain core:Event ;
+    rdfs:range xsd:nonNegativeInteger ;
+    rdfs:comment "事件持续的 tick 数（0 = 瞬时）。"@zh .
+
+############################################################
+# 3. Space —— 只到「位置可指称」为止
+############################################################
+
+core:Location a owl:Class ;
+    rdfs:subClassOf core:Thing ;
+    rdfs:label "Location"@en , "位置"@zh ;
+    rdfs:comment """
+        可指称的位置。刻意止步于此：
+        距离、坐标、邻接、区域、移动、交通——这些度量与行为一律不预设，
+        全部是 L2 涌现候选。「多远」依赖度量约定，而约定即涌现。
+    """@zh .
+
+core:locatedAt a owl:ObjectProperty ;
+    rdfs:domain core:Thing ;
+    rdfs:range core:Location ;
+    rdfs:comment "某物位于某位置。可选属性：没有任何公理要求 Thing 必须有位置。"@zh .
+
+############################################################
+# 4. Entity —— 非主体的可指称对象
+############################################################
+
+core:Entity a owl:Class ;
+    rdfs:subClassOf core:Thing ;
+    rdfs:label "Entity"@en , "实体"@zh ;
+    rdfs:comment "非主体的可指称对象。资源、工具、设施、符号、任何被发明的对象类型都应是它的子类——但发明它们不是 L0 的事。"@zh .
+
+############################################################
+# 5. Event / Action —— 不可变日志 + 开放的行动类型
+############################################################
+
+core:Event a owl:Class ;
+    rdfs:subClassOf core:Thing ;
+    rdfs:label "Event"@en , "事件"@zh ;
+    rdfs:comment "不可变日志条目（append-only）。Event 一旦记录，不得修改或删除。"@zh ;
+    rdfs:subClassOf [ a owl:Restriction ; owl:onProperty core:tick ; owl:someValuesFrom xsd:integer ] ,
+                    [ a owl:Restriction ; owl:onProperty core:actor ; owl:someValuesFrom core:Agent ] ,
+                    [ a owl:Restriction ; owl:onProperty core:underOntologyVersion ; owl:cardinality 1 ] .
+
+core:actor a owl:ObjectProperty , owl:FunctionalProperty ;
+    rdfs:domain core:Event ;
+    rdfs:range core:Agent ;
+    rdfs:comment "事件的发起者。"@zh .
+
+core:underOntologyVersion a owl:DatatypeProperty , owl:FunctionalProperty ;
+    rdfs:domain core:Event ;
+    rdfs:range xsd:string ;
+    rdfs:comment "记录该事件时所依据的本体版本——双版本路由（旧事件按旧版本解释）的锚点。"@zh .
+
+core:involves a owl:ObjectProperty ;
+    rdfs:domain core:Event ;
+    rdfs:range core:Thing ;
+    rdfs:comment "事件涉及的其他对象（Agent / Entity / Location 皆可）。"@zh .
+
+core:Action a owl:Class ;
+    rdfs:subClassOf core:Event ;
+    rdfs:label "Action"@en , "行动"@zh ;
+    rdfs:comment """
+        由 agent 发起的事件。类型开放：L0 不列举任何行动类型——
+        没有 move、没有 trade、没有 speak、没有 build 的枚举。
+        任何新行动类型都作为 L2 提案进入，经 SHACL/OWL 校验后生效。
+    """@zh .
+
+############################################################
+# 6. Relation —— 社会结构的载体
+############################################################
+
+core:Relation a owl:Class ;
+    rdfs:subClassOf core:Thing ;
+    rdfs:label "Relation"@en , "关系"@zh ;
+    rdfs:comment """
+        两个 Thing 之间的关联，是一切社会结构的载体。
+        类型开放：拥有、信任、统治、连接、亲缘……全部是涌现候选，
+        无一是 L0 公理。L0 甚至不禁止未来社会把 agent 变成关系的对象——
+        那是涌现社会自己的选择，只要不走 L0 修改。
+    """@zh .
+
+core:from a owl:ObjectProperty , owl:FunctionalProperty ;
+    rdfs:domain core:Relation ;
+    rdfs:range core:Thing .
+
+core:to a owl:ObjectProperty , owl:FunctionalProperty ;
+    rdfs:domain core:Relation ;
+    rdfs:range core:Thing .
+
+############################################################
+# 7. Observation —— 信息的唯一来源
+############################################################
+
+core:Observation a owl:Class ;
+    rdfs:subClassOf core:Event ;
+    rdfs:label "Observation"@en , "观测"@zh ;
+    rdfs:comment "agent 感知到的事实。agent 不知道任何未被观测的事——观测是信息的唯一来源。"@zh .
+
+core:about a owl:ObjectProperty ;
+    rdfs:domain core:Observation ;
+    rdfs:range core:Thing ;
+    rdfs:comment "被观测的对象。"@zh .
+
+############################################################
+# 8. ChangeProposal —— 元宪法：允许社会改写自己
+############################################################
+
+core:ChangeProposal a owl:Class ;
+    rdfs:subClassOf core:Thing ;
+    rdfs:label "ChangeProposal"@en , "本体变更提案"@zh ;
+    rdfs:comment """
+        唯一被允许进入 L0 的「治理状」概念：本体变更提案。
+        L0 不规定谁有权提案、谁审批、如何审批——提案与审批的机制本身
+        是 L1/L2 的涌现对象。唯一硬约束：targetLayer 不得为 L0（L0 不可修改）。
+    """@zh ;
+    rdfs:subClassOf [ a owl:Restriction ; owl:onProperty core:proposedBy ; owl:someValuesFrom core:Agent ] ,
+                    [ a owl:Restriction ; owl:onProperty core:targetLayer ; owl:cardinality 1 ] .
+
+core:proposedBy a owl:ObjectProperty , owl:FunctionalProperty ;
+    rdfs:domain core:ChangeProposal ;
+    rdfs:range core:Agent .
+
+core:targetLayer a owl:DatatypeProperty , owl:FunctionalProperty ;
+    rdfs:domain core:ChangeProposal ;
+    rdfs:range xsd:string ;
+    rdfs:comment "取值仅允许 L1 或 L2。为 L0 的提案一律拒绝（L0 不可修改）。"@zh .
+
+core:proposalStatus a owl:DatatypeProperty ;
+    rdfs:domain core:ChangeProposal ;
+    rdfs:range xsd:string ;
+    rdfs:comment "proposed | validating | approved | rejected | rolledBack。状态机本身不属 L0 公理，由治理实践涌现。"@zh .
+
+core:appliesFromVersion a owl:DatatypeProperty ;
+    rdfs:domain core:ChangeProposal ;
+    rdfs:range xsd:string ;
+    rdfs:comment "提案生效后的本体版本号。"@zh .
+
+############################################################
+# 刻意不在 L0 中的东西
+# 以下全部降级为 L2 涌现候选——它们只是「可能路径之一」，无一是必经：
+#   组织 / 科层 / 职位 / 汇报线
+#   Contract 契约、财产 / 所有权
+#   Currency 货币 / 市场 / 雇佣 / 借贷
+#   Constitution 宪法 / Law 法律 / Charter 章程
+#   Election 选举 / 任命 / 共识
+#   Reputation 声望 / Trust 信任 / Skill 技能
+#   Distance 距离 / Move 移动 / TransportMode 交通方式
+#   Language 语言 / Calendar 历法 / 任何具体行动类型枚举
+############################################################
