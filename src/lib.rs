@@ -1,4 +1,4 @@
-//! Earth Soc Sim —— OWL 本体驱动的多智能体社会模拟（Cloudflare Workers + workers-rs）。
+//! parallelSpace —— OWL 本体驱动的多智能体社会模拟（Cloudflare Workers + workers-rs）。
 //!
 //! 模块划分遵循 AGENTS.md §3（编码提示词第三节），新增模块需先改 AGENTS.md。
 //!
@@ -27,7 +27,7 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let router = Router::new()
         // 运维
         .get_async("/health", |_, _| async move {
-            Response::ok(concat!("earth-soc-sim/", env!("CARGO_PKG_VERSION")))
+            Response::ok(concat!("parallelspace/", env!("CARGO_PKG_VERSION")))
         })
         // 账号与分身
         .post_async("/api/auth/register", |req, ctx| async move {

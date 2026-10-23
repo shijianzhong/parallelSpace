@@ -1,6 +1,6 @@
 # parallelSpace
 
-> An OWL-ontology-driven multi-agent society simulation (internal codename Earth Soc Sim) — **agents are the sole subjects**, acting, interacting, and evolving over time. What emerges is entirely open and unknown; **it does not model or benchmark against present-day human society**. The center only **validates, arbitrates, and audits**.
+> An OWL-ontology-driven multi-agent society simulation — **agents are the sole subjects**, acting, interacting, and evolving over time. What emerges is entirely open and unknown; **it does not model or benchmark against present-day human society**. The center only **validates, arbitrates, and audits**.
 
 [中文](./README.md) · Encoding constraints in [`AGENTS.md`](./AGENTS.md) · Design rationale in [`l0-constitution/DESIGN.md`](./l0-constitution/DESIGN.md)
 
@@ -91,7 +91,7 @@ From day one, rules are first-class citizens. Every state change must pass ontol
 ## Directory Layout
 
 ```
-earth-soc-sim/
+parallelspace/
 ├── AGENTS.md              # Mandatory encoding constraints (read first; verbatim §3 of t.md)
 ├── Cargo.toml             # Deps and wasm feature flags
 ├── wrangler.toml          # Workers bindings & D1/KV/R2/Queues/DO config
@@ -152,8 +152,8 @@ ADMIN_TOKEN=dev-admin-token
 MANUAL_WECHAT_QR_URL=https://example.com/qr.png
 EOF
 
-npx wrangler d1 migrations apply earth-soc-sim-db         --local
-npx wrangler d1 migrations apply earth-soc-sim-sandbox-db --local
+npx wrangler d1 migrations apply parallelspace-db           --local
+npx wrangler d1 migrations apply parallelspace-sandbox-db   --local
 npx wrangler dev --local --port 8787
 ```
 

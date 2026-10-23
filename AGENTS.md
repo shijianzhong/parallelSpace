@@ -1,4 +1,4 @@
-# AGENTS.md — Earth Soc Sim 编码提示词
+# AGENTS.md — parallelSpace 编码提示词
 
 > 本文件由 t.md《地球模拟社会完整文档 v1.0》第三部分原样提取，作为本项目 AI 协作的强制约束。
 > 完整上下文（PRD/SAD）见仓库外 t.md；本文件与 t.md 冲突时以 t.md 为准并回头修订本文件。

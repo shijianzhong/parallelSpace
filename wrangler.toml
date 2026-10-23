@@ -1,7 +1,7 @@
 # wrangler.toml — Cloudflare Workers 部署配置
 # 本地开发：npx wrangler dev（模拟 D1/KV/R2/Queues；DO 需 miniflare 支持，0.8 起默认可用）
 
-name = "earth-soc-sim"
+name = "parallelspace"
 main = "build/worker/shim.mjs"
 compatibility_date = "2026-10-01"
 
@@ -25,8 +25,8 @@ MANUAL_WECHAT_QR_URL = ""
 # ---- D1：结构化状态 / 订单 / 积分 ----
 [[d1_databases]]
 binding = "DB"
-database_name = "earth-soc-sim-db"
-# database_id 由 `npx wrangler d1 create earth-soc-sim-db` 生成后回填；本地开发可留占位
+database_name = "parallelspace-db"
+# database_id 由 `npx wrangler d1 create parallelspace-db` 生成后回填；本地开发可留占位
 database_id = "00000000-0000-0000-0000-000000000000"
 migrations_dir = "migrations"
 
@@ -38,15 +38,15 @@ id = "0000000000000000000000000000000000000000000000000000000000000000"
 # ---- R2：事件日志 / LLM 记录 / 地图瓦片 / 本体版本 ----
 [[r2_buckets]]
 binding = "R2"
-bucket_name = "earth-soc-sim"
+bucket_name = "parallelspace"
 
 # ---- Queues：Agent 任务总线 ----
 [[queues.producers]]
 binding = "AGENT_TASKS"
-queue = "earth-soc-sim-agent-tasks"
+queue = "parallelspace-agent-tasks"
 
 [[queues.consumers]]
-queue = "earth-soc-sim-agent-tasks"
+queue = "parallelspace-agent-tasks"
 max_batch_size = 100
 max_batch_timeout = 30
 
@@ -66,7 +66,7 @@ crons = ["*/5 * * * *"]
 # ---- 沙箱绑定（governance::sandbox 专用，禁止指向生产库）----
 [[d1_databases]]
 binding = "DB_SANDBOX"
-database_name = "earth-soc-sim-sandbox-db"
+database_name = "parallelspace-sandbox-db"
 database_id = "00000000-0000-0000-0000-000000000001"
 migrations_dir = "migrations"
 
@@ -76,4 +76,4 @@ id = "0000000000000000000000000000000000000000000000000000000000000001"
 
 [[r2_buckets]]
 binding = "R2_SANDBOX"
-bucket_name = "earth-soc-sim-sandbox"
+bucket_name = "parallelspace-sandbox"

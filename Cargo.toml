@@ -1,8 +1,8 @@
 [package]
-name = "earth-soc-sim"
+name = "parallelspace"
 version = "0.1.0"
 edition = "2021"
-description = "Earth Soc Sim — OWL 本体驱动的多智能体社会模拟（Cloudflare Workers + workers-rs）"
+description = "parallelSpace — OWL 本体驱动的多智能体社会模拟（Cloudflare Workers + workers-rs）。agent 是唯一主体，开放涌现，不对标人类社会。"
 license = "MIT"
 
 [lib]

@@ -1,6 +1,6 @@
 # parallelSpace · 平行空间
 
-> OWL 本体驱动的多智能体社会模拟（内部代号 Earth Soc Sim）—— **agent 是唯一主体**，随时间自主行动、交互、演化；衍生出什么完全开放、未知，**不对标人类当前社会**。中央只做**校验、仲裁、审计**。
+> OWL 本体驱动的多智能体社会模拟 —— **agent 是唯一主体**，随时间自主行动、交互、演化；衍生出什么完全开放、未知，**不对标人类当前社会**。中央只做**校验、仲裁、审计**。
 
 [English](./README.en.md) · 编码约束见 [`AGENTS.md`](./AGENTS.md) · 设计定调见 [`l0-constitution/DESIGN.md`](./l0-constitution/DESIGN.md)
 
@@ -91,7 +91,7 @@
 ## 目录结构
 
 ```
-earth-soc-sim/
+parallelspace/
 ├── AGENTS.md              # 编码强制约束（必读，t.md 第三部分原样提取）
 ├── Cargo.toml             # 依赖与 wasm 特性开关
 ├── wrangler.toml          # Workers 绑定与 D1/KV/R2/Queues/DO 配置
@@ -152,8 +152,8 @@ ADMIN_TOKEN=dev-admin-token
 MANUAL_WECHAT_QR_URL=https://example.com/qr.png
 EOF
 
-npx wrangler d1 migrations apply earth-soc-sim-db       --local
-npx wrangler d1 migrations apply earth-soc-sim-sandbox-db --local
+npx wrangler d1 migrations apply parallelspace-db           --local
+npx wrangler d1 migrations apply parallelspace-sandbox-db   --local
 npx wrangler dev --local --port 8787
 ```
 

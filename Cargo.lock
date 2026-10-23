@@ -126,26 +126,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "earth-soc-sim"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "chrono",
- "getrandom 0.3.4",
- "getrandom 0.4.3",
- "oxrdf",
- "reasonable",
- "rio_api",
- "rio_turtle",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "ulid",
- "wasm-bindgen-test",
- "worker",
-]
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -521,6 +501,26 @@ dependencies = [
  "oxiri",
  "rand 0.9.5",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "parallelspace"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "getrandom 0.3.4",
+ "getrandom 0.4.3",
+ "oxrdf",
+ "reasonable",
+ "rio_api",
+ "rio_turtle",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "ulid",
+ "wasm-bindgen-test",
+ "worker",
 ]
 
 [[package]]
