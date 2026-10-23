@@ -50,6 +50,12 @@ pub struct ApproveInput {
     pub approved_by: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SandboxRunInput {
+    pub proposal_id: String,
+    pub ticks: u64,
+}
+
 pub(crate) fn check_admin(req: &worker::Request, ctx: &RouteContext<()>) -> Result<()> {
     let expected = ctx
         .env
@@ -160,4 +166,60 @@ pub async fn list_versions(req: worker::Request, ctx: RouteContext<()>) -> AppRe
     let db = ctx.env.d1("DB")?;
     let rows = d1::list_versions(&db).await?;
     Ok(Response::from_json(&rows)?)
+}
+
+/// 提案影响分析（G4 接线）：临时装载提案本体 + 按类近似统计受影响实例数。
+/// 近似口径见 governance::ontology_admin::analyze_impact 的注释与报告 notes。
+pub async fn analyze_impact(req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    check_admin(&req, &ctx).map_err(|_| AppError::Unauthorized)?;
+    let version = crate::api::require_param(&ctx, "version")?;
+    let env = ctx.env.clone();
+    let report = ontology_admin::analyze_impact(&env, &version).await?;
+    Ok(Response::from_json(&report)?)
+}
+
+/// 跑本体沙箱（G4 接线）：隔离校验在 governance::sandbox 内，
+/// 真实 N tick 仿真是 G9，本路由只把既有函数挂上 admin 通道。
+pub async fn run_sandbox(mut req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    check_admin(&req, &ctx).map_err(|_| AppError::Unauthorized)?;
+    let input: SandboxRunInput = json_body(&mut req).await?;
+    let env = ctx.env.clone();
+    let result = crate::governance::sandbox::run_sandbox(&env, &input.proposal_id, input.ticks).await?;
+    Ok(Response::from_json(&result)?)
+}
+
+/// 仲裁立案（G4 接线）：案件落事件日志，裁决流程在 M2。
+pub async fn file_arbitration_case(
+    mut req: worker::Request,
+    ctx: RouteContext<()>,
+) -> AppResult<Response> {
+    check_admin(&req, &ctx).map_err(|_| AppError::Unauthorized)?;
+    let input: crate::governance::arbitration::ArbitrationCaseInput = json_body(&mut req).await?;
+    let env = ctx.env.clone();
+    let case_id = crate::governance::arbitration::file_case(&env, &input).await?;
+    Ok(Response::from_json(&serde_json::json!({
+        "case_id": case_id,
+        "status": "filed",
+    }))?)
+}
+
+/// 事件回放（G4 接线）：?from_tick=&to_tick=，报告含版本不一致计数
+/// （硬禁：用当前本体解释旧事件却不报语义差异，见 event::replay）。
+pub async fn replay_events(req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    check_admin(&req, &ctx).map_err(|_| AppError::Unauthorized)?;
+    let url = req.url()?;
+    let params: std::collections::HashMap<String, String> =
+        url.query_pairs().into_owned().collect();
+    let parse_tick = |key: &str| -> AppResult<u64> {
+        params
+            .get(key)
+            .ok_or_else(|| AppError::InvalidInput(format!("missing query param: {key}")))?
+            .parse::<u64>()
+            .map_err(|_| AppError::InvalidInput(format!("query param {key} must be u64")))
+    };
+    let from_tick = parse_tick("from_tick")?;
+    let to_tick = parse_tick("to_tick")?;
+    let env = ctx.env.clone();
+    let report = crate::event::replay(&env, from_tick, to_tick).await?;
+    Ok(Response::from_json(&report)?)
 }

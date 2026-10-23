@@ -46,6 +46,16 @@ fn collect_triples(turtle: &str, out: &mut Vec<Triple>) -> AppResult<()> {
     Ok(())
 }
 
+/// 只解析 Turtle 文本为三元组（不装载内嵌本体、不做推理）。
+///
+/// 供治理影响分析（governance::ontology_admin::analyze_impact）复用与
+/// `Owl2RlReasoner::build` 完全相同的解析路径，避免出现第二套解析语义。
+pub fn parse_turtle(turtle: &str) -> AppResult<Vec<Triple>> {
+    let mut triples = Vec::new();
+    collect_triples(turtle, &mut triples)?;
+    Ok(triples)
+}
+
 fn to_oxrdf(t: RioTriple<'_>) -> Option<Triple> {
     let subject: NamedOrBlankNode = match t.subject {
         RioSubject::NamedNode(n) => NamedNode::new_unchecked(n.iri).into(),
@@ -179,5 +189,15 @@ mod tests {
     #[wasm_bindgen_test]
     fn build_rejects_bad_turtle() {
         assert!(Owl2RlReasoner::build("<<<not turtle").is_err());
+    }
+
+    #[wasm_bindgen_test]
+    fn parse_turtle_returns_triples_without_reasoning() {
+        let ttl = "@prefix soc: <http://soc.example/ontology#> .\n<urn:x:1> a soc:Person .\n";
+        let triples = parse_turtle(ttl).expect("parse");
+        assert_eq!(triples.len(), 1);
+        assert_eq!(triples[0].subject.to_string(), "<urn:x:1>");
+        // 坏 Turtle 同样报错，与 build 路径一致
+        assert!(parse_turtle("<<<not turtle").is_err());
     }
 }

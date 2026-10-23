@@ -374,6 +374,67 @@ AG5=$(echo "$NA5" | get agent_id)
 chk "无存量卡且不带卡激活 = 400" 400 "$(post_code "/api/agent/$AG5/activate" '{}' -H "x-admin-token: $ADMIN_TOKEN")"
 rm -rf "$TTL_DIR5"
 
+echo "== 15. G4 接线：沙箱 / 仲裁 / 回放 / 影响分析 / 离线代理闸门 / 组织创始人"
+# 沙箱：admin 通道挂既有 run_sandbox（隔离校验在模块内；真实仿真是 G9）
+P="{\"proposal_id\":\"smoke-$RUN_ID\",\"ticks\":3}"
+SB=$(post /api/admin/sandbox/run "$P" -H "x-admin-token: $ADMIN_TOKEN")
+chk "沙箱返回 passed=true" True "$(echo "$SB" | get passed)"
+chk "沙箱 ticks_run = 3" 3 "$(echo "$SB" | get ticks_run)"
+chk "沙箱无 admin 令牌 = 401" 401 "$(post_code /api/admin/sandbox/run "$P")"
+# 仲裁立案：双方为已存在的不同分身（AG 与 AG3）；原被告相同 = 400
+P="{\"claimant_id\":\"$AG\",\"respondent_id\":\"$AG3\",\"claim\":\"smoke arbitration claim\"}"
+ARB=$(post /api/admin/arbitration/cases "$P" -H "x-admin-token: $ADMIN_TOKEN")
+chk "仲裁立案返回 case_id" yes "$([ -n "$(echo "$ARB" | get case_id)" ] && echo yes || echo no)"
+P="{\"claimant_id\":\"$AG\",\"respondent_id\":\"$AG\",\"claim\":\"self case\"}"
+chk "原被告相同立案 = 400" 400 "$(post_code /api/admin/arbitration/cases "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+# 回放：tick 0 空范围合法且报告版本不一致计数；倒置范围 = 400
+RP=$(curl -s --max-time 10 "$BASE/api/admin/replay?from_tick=0&to_tick=0" -H "x-admin-token: $ADMIN_TOKEN")
+chk "回放空范围 version_mismatches = 0" 0 "$(echo "$RP" | get version_mismatches)"
+RPCODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE/api/admin/replay?from_tick=5&to_tick=4" -H "x-admin-token: $ADMIN_TOKEN")
+chk "回放倒置范围 = 400" 400 "$RPCODE"
+# 影响分析：第 10 节的 V1（域文件声明 core:TransportMode，当前无实例）
+IMP=$(curl -s --max-time 10 "$BASE/api/admin/ontology/versions/$V1/impact" -H "x-admin-token: $ADMIN_TOKEN")
+chk "影响分析版本回显" "$V1" "$(echo "$IMP" | get version)"
+chk "影响分析概念含 TransportMode" yes "$(echo "$IMP" | python3 -c "import sys,json;print('yes' if any('TransportMode' in c['iri'] for c in json.load(sys.stdin)['concepts']) else 'no')" 2>/dev/null || echo no)"
+chk "影响分析与基线一致 = True" True "$(echo "$IMP" | get consistent_with_baseline)"
+chk "影响分析不存在的版本 = 400" 400 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE/api/admin/ontology/versions/nope-ver/impact" -H "x-admin-token: $ADMIN_TOKEN")"
+# 离线代理闸门：复用第 8 节同款 good 负载（SHACL 只看图形状，与 agent_id 无绑定）
+TTL_DIR7=$(mktemp -d)
+cat > "$TTL_DIR7/good.ttl" <<'TTL'
+@prefix soc: <http://soc.example/ontology#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+<urn:agent:smoke> a soc:Person ;
+    soc:status "active" ;
+    soc:displayName "n" ;
+    soc:locatedAt <urn:l:1> ;
+    soc:hasSkill <urn:s:1> ;
+    soc:hasGoal <urn:g:1> ;
+    soc:reputation "0.5"^^xsd:decimal .
+<urn:l:1> a soc:Location .
+<urn:s:1> a soc:Skill .
+<urn:g:1> a soc:Goal .
+TTL
+mkaction7() { python3 -c 'import json,os;rdf=open(os.environ["RDF_FILE"]).read();print(json.dumps({"agent_id":os.environ["AGID"],"action_type":os.environ["ACT"],"params":{"rdf":rdf}}))'; }
+DEF=$(post /api/action "$(AGID="$AG3" ACT=trade RDF_FILE="$TTL_DIR7/good.ttl" mkaction7)")
+chk "离线 trade 被 Defer" defer_to_owner "$(echo "$DEF" | get proxy_decision)"
+chk "离线 trade accepted=false" False "$(echo "$DEF" | get accepted)"
+DEN=$(post /api/action "$(AGID="$AG3" ACT=breach RDF_FILE="$TTL_DIR7/good.ttl" mkaction7)")
+chk "离线 breach 被 Deny" deny "$(echo "$DEN" | get proxy_decision)"
+WRK=$(post /api/action "$(AGID="$AG3" ACT=work RDF_FILE="$TTL_DIR7/good.ttl" mkaction7)")
+chk "离线 work 放行 accepted=true" True "$(echo "$WRK" | get accepted)"
+OWN=$(post /api/action "$(AGID="$AG3" ACT=trade RDF_FILE="$TTL_DIR7/good.ttl" mkaction7)" -H "Authorization: Bearer $TOKEN2")
+chk "本人在线 trade 被接受" True "$(echo "$OWN" | get accepted)"
+rm -rf "$TTL_DIR7"
+# 组织创始人绑定：会话账号优先；无会话取入参；会话冒名 = 403
+P="{\"name\":\"smoke-org-$RUN_ID\",\"charter_id\":\"charter-$RUN_ID\"}"
+ORG1=$(post /api/org "$P" -H "Authorization: Bearer $TOKEN2")
+chk "会话建组织创始人 = 会话账号" "$ACC3" "$(echo "$ORG1" | get founder_account_id)"
+P="{\"name\":\"smoke-org2-$RUN_ID\",\"charter_id\":\"charter-$RUN_ID\",\"founder_account_id\":\"$ACC\"}"
+ORG2=$(post /api/org "$P")
+chk "无会话建组织创始人 = 入参" "$ACC" "$(echo "$ORG2" | get founder_account_id)"
+P="{\"name\":\"smoke-org3-$RUN_ID\",\"charter_id\":\"charter-$RUN_ID\",\"founder_account_id\":\"$ACC\"}"
+chk "会话冒名创始人 = 403" 403 "$(post_code /api/org "$P" -H "Authorization: Bearer $TOKEN2")"
+
 echo
 echo "结果：$pass 通过 / $fail 失败"
 [ "$fail" -eq 0 ]

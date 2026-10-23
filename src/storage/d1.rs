@@ -858,6 +858,46 @@ pub async fn approve_version_row(db: &D1Database, version: &str, approved_by: &s
     Ok(changes == 1)
 }
 
+/// 单值计数（影响分析用）：SELECT COUNT(*) 的统一读法。
+async fn count_query(db: &D1Database, sql: &str, bind: Option<&str>) -> AppResult<u64> {
+    #[derive(serde::Deserialize)]
+    struct Row {
+        n: i64,
+    }
+    let stmt = db.prepare(sql);
+    let stmt = match bind {
+        Some(v) => stmt.bind(&[s(v)])?,
+        None => stmt,
+    };
+    let row = stmt.first::<Row>(None).await?;
+    Ok(row.map(|r| r.n.max(0) as u64).unwrap_or(0))
+}
+
+/// 实例计数（G4 analyze_impact 的近似口径，见 governance::ontology_admin）。
+pub async fn count_agents(db: &D1Database) -> AppResult<u64> {
+    count_query(db, "SELECT COUNT(*) AS n FROM agents", None).await
+}
+
+/// 实例计数（G4 analyze_impact 的近似口径）。
+pub async fn count_organizations(db: &D1Database) -> AppResult<u64> {
+    count_query(db, "SELECT COUNT(*) AS n FROM organizations", None).await
+}
+
+/// 实例计数（G4 analyze_impact 的近似口径）。
+pub async fn count_positions(db: &D1Database) -> AppResult<u64> {
+    count_query(db, "SELECT COUNT(*) AS n FROM positions", None).await
+}
+
+/// 某事件类型的已落事件数（events_index 按 type 索引；事件即该事件类的实例）。
+pub async fn count_events_by_type(db: &D1Database, event_type: &str) -> AppResult<u64> {
+    count_query(
+        db,
+        "SELECT COUNT(*) AS n FROM events_index WHERE type = ?1",
+        Some(event_type),
+    )
+    .await
+}
+
 /// 回滚时的版本行状态互换：被离开的 active → rolled_back，目标 → active。
 pub async fn swap_active_version(db: &D1Database, from_version: &str, to_version: &str) -> AppResult<()> {
     batch_write(

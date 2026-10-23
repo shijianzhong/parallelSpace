@@ -4,14 +4,14 @@
 //! 因此本模块对每条事件核对 underOntologyVersion 与当前版本，
 //! 不一致时计入 VersionMismatch，由调用方决定是否继续。
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use worker::{Bucket, Env};
 
 use crate::common::error::{AppError, AppResult};
 use crate::ontology::version::OntologyRouter;
 
 /// 回放范围内的轻量事件记录（只含审计字段，不含 payload）。
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct EventRecordLite {
     pub id: String,
     #[serde(rename = "type")]
@@ -20,7 +20,7 @@ pub struct EventRecordLite {
     pub ontology_version: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct ReplayReport {
     pub from_tick: u64,
     pub to_tick: u64,

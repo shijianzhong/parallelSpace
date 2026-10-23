@@ -19,7 +19,7 @@
 
 | # | 缺失 | 证据 | 方案要点 |
 | --- | --- | --- | --- |
-| G4 | **四个模块是死代码**：`sandbox::run_sandbox`、`arbitration::file_case`、`event::replay`、`offline_proxy::decide` 均无任何调用方、无路由；AGENTS 模板里承诺的 `analyze_impact` 根本不存在 | 调用图核查（仅 mod.rs re-export） | 逐个接线：sandbox/arbitration/replay 挂 admin 路由；offline_proxy 接入 action 提交路径（离线状态 agent 的不可逆动作 → Defer/Deny）；analyze_impact 新写（提案本体临时装载 + SPARQL 查受影响实例数） |
+| G4 | **四个模块是死代码**：`sandbox::run_sandbox`、`arbitration::file_case`、`event::replay`、`offline_proxy::decide` 均无任何调用方、无路由；AGENTS 模板里承诺的 `analyze_impact` 根本不存在 | 调用图核查（仅 mod.rs re-export） | 逐个接线：sandbox/arbitration/replay 挂 admin 路由；offline_proxy 接入 action 提交路径（离线状态 agent 的不可逆动作 → Defer/Deny）；analyze_impact 新写（提案本体临时装载 + SPARQL 查受影响实例数） | **已落地（2026-10-23，见第九节）：影响分析计数为结构化存储近似口径（完整 SPARQL 待 G14），Defer 暂不落 PendingDecision（G15 未拍板）** |
 | G5 | **PersonCard 链路缺失**：注册的 `narrative` 消毒后直接丢弃；agents 表无 card 字段；LLM 结构化 PersonCard 是 TODO(M2) | `api/auth.rs:6,37-44`；`migrations/0001` agents 表 | migration 0003 加 `person_card_rdf TEXT`；注册可选带 card 并先过 SHACL 才落库；激活接口（本轮新增）优先用已存 card。LLM 结构化等 G12 上游定版后接。**已落地（2026-10-23，见第八节）：编号顺延为 migration 0005（0003/0004 已被 redeem/identities 占用）** |
 | G9 | **沙箱是假的**：`run_sandbox` 只校验绑定名存在，就无条件返回 `passed: true`，不装载提案本体、不跑 tick | `governance/sandbox.rs:34-55` | 提案 Turtle 装入沙箱 R2 → 用 reasonable 跑一致性 + SHACL 全量形状 → 结果如实返回；ticks 参数在真实仿真接入前从结果里移除，不要假报 |
 | G7 | **没有账号认证**：注册只有 email、无口令/会话；`GET /api/agent/:id`、`POST /api/action`、`POST /api/org` 全部无鉴权，任何人可冒充任何 agent_id 提交行动 | `api/auth.rs`、`api/agent.rs`、`api/action.rs` | 会话令牌（注册/登录发 token，KV 存会话）；action/org 校验 token 与 agent 归属；与现有 admin token 体系分开。属安全项，Phase 2 第一位。**登录方案已定版（2026-10-23 用户拍板）**：治理后台走 Cloudflare Access（Google/GitHub + 邮箱白名单，零开发、随 G11 部署配置）；C 端三通道——邮箱验证码首发 + Google/GitHub OAuth；微信登录待开放平台资质排二期。详见文末 G7 细化设计 |
@@ -121,3 +121,13 @@
 - **已实现**：migration 0005 给 agents 加 `person_card_rdf TEXT`（文档原写 0003，0003/0004 已被 redeem / identities 占用，顺延）；`POST /api/agent`（需会话）可选携带 `person_card_rdf`，先过 `validate_person_card` SHACL 才落库，违规 → 422 + violations 且不建分身，响应带 `person_card_stored`；不带 card 保持兼容（旧 `/api/auth/register` 不变）。激活接口入参改可选：请求未带（或空白）时用已存 card，两者都无保持原 400 语义；请求带卡仍优先于已存卡。读路径：`GET /api/agent/:id` 与 `GET /api/me` 均带出 `person_card_rdf`。
 - **验收**：smoke 新增第 14 节 10 项（坏卡注册 422 且不建分身、无卡兼容、带卡落库+查询带出、付费推进 pending、空体激活用存量卡 → active、无存量卡不带卡激活 400），全量 **88 通过 / 0 失败**；单测 89 不变；clippy 0 warning。
 - **遗留**：LLM 结构化生成 PersonCard 仍为 TODO(M2)，等 G12 上游定版后接，本次未假接；`narrative` 本身仍只作消毒校验、不落库（落库的是 card），如需叙述留痕另立条目。
+
+## 九、G4 落地记录（2026-10-23）
+
+- **已实现**：
+  - 三个死代码模块挂 admin 路由（沿用 `check_admin`）：`POST /api/admin/sandbox/run` → `sandbox::run_sandbox`；`POST /api/admin/arbitration/cases` → `arbitration::file_case`；`GET /api/admin/replay?from_tick=&to_tick=` → `event::replay`（`ReplayReport` / `EventRecordLite` 补 Serialize 派生，签名未动）。
+  - `analyze_impact` 新写：`GET /api/admin/ontology/versions/:version/impact` —— 从 R2 取回该版本提案 Turtle → `Owl2RlReasoner` 临时装载（内嵌基线本体 + 提案一轮 OWL 2 RL）报一致性 → `proposal_concepts` 提取提案定义/修改的概念（作主语出现的具名 IRI）→ 按类统计现存实例。**近似点如实标注**：实例层未全量入 RDF、无 SPARQL 执行引擎（G14 未引入 oxigraph），计数走结构化存储——Agent（含 core:Agent）/ Organization / Position 查对应表，其余概念查 `events_index` 事件类型计数；未被索引的概念计 0（当前无可计数实例，非语义无影响）；仅作宾语被引用的概念不在清单内。报告 `notes` 字段同步披露此口径。
+  - `offline_proxy::decide` 接入 `POST /api/action`：位置在 L2 SHACL 校验通过后、落事件前（不改变既有 violations 拒绝语义）。所有者在线（请求会话账号 == 分身归属账号）时代理规则不介入；不在场时 Allow（Move/Work/Learn/Chat）放行，DeferToOwner（Trade/Ally/Employ/Vote/Legislate）与 Deny（Breach）一律拒绝提交 + 写审计（`action.proxy_deferred` / `action.proxy_denied`）+ 响应 `accepted:false` 与机器可读 `proxy_decision`。**边界**：不建 PendingDecision 表、不建决策收件箱/审批接口（G15 未经用户拍板写入）——Defer 本次语义是「拒绝并留痕」而非「排队待批」；`contract_class_deferred`（marriage/major_contract/loan）仍无 HTTP 调用面（现无接口接收契约类别参数，org 创建只有 charter_id），保持库级函数待 G15 一并设计。
+  - 顺带补 G7 遗留 org 创始人绑定：migration 0006 给 organizations 加 `founder_account_id`（历史行 NULL，不回填）；`POST /api/org` 带会话时创始人 = 会话账号、入参声称不一致 → 403；无会话按过渡模式（`REQUIRE_AUTH=true` → 401，否则取入参、可空）；响应与 OrganizationCreated 事件负载均带 `founder_account_id`。
+- **验收**：smoke 新增第 15 节 19 项（沙箱 passed/ticks/无令牌 401、仲裁立案/原被告相同 400、回放空范围/倒置 400、影响分析版本回显/概念含 TransportMode/与基线一致/不存在版本 400、离线 trade Defer/breach Deny/work 放行/本人在线 trade 接受、org 创始人会话优先/入参/冒名 403），全量 **107 通过 / 0 失败**；单测 **91 passed**（+2：`reason::parse_turtle`、`ontology_admin::proposal_concepts`）；cargo check（wasm32 --all-targets）通过、clippy 0 warning。本地跑 smoke 前需先 `wrangler d1 migrations apply --local` 应用 0006（本地环境步骤，非代码事项）。
+- **遗留**：`run_sandbox` 本体仍是 MVP 占位（隔离校验 + 无条件 passed），真实 N tick 仿真是 G9；仲裁只有立案，裁决流程（举证/陪审）仍在 M2；影响分析的完整 SPARQL 口径待 G14。

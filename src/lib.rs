@@ -115,6 +115,19 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         })
         .post_async("/api/admin/ontology/versions/:version/approve", |req, ctx| async move {
             api::into_router_result(api::admin::approve_ontology(req, ctx).await)
+        })
+        // G4 接线：提案影响分析 / 沙箱 / 仲裁立案 / 事件回放（均为 admin 通道）
+        .get_async("/api/admin/ontology/versions/:version/impact", |req, ctx| async move {
+            api::into_router_result(api::admin::analyze_impact(req, ctx).await)
+        })
+        .post_async("/api/admin/sandbox/run", |req, ctx| async move {
+            api::into_router_result(api::admin::run_sandbox(req, ctx).await)
+        })
+        .post_async("/api/admin/arbitration/cases", |req, ctx| async move {
+            api::into_router_result(api::admin::file_arbitration_case(req, ctx).await)
+        })
+        .get_async("/api/admin/replay", |req, ctx| async move {
+            api::into_router_result(api::admin::replay_events(req, ctx).await)
         });
 
     router.run(req, env).await

@@ -16,6 +16,7 @@ use worker::Env;
 
 use crate::common::error::{AppError, AppResult};
 use crate::ontology::iri;
+use crate::ontology::reason::{parse_turtle, Owl2RlReasoner};
 use crate::ontology::version::{OntologyRouter, OntologyVersion};
 use crate::storage::{d1, kv, r2};
 
@@ -280,6 +281,123 @@ pub async fn approve_version(env: &Env, version: &str, approved_by: &str) -> App
     Ok(())
 }
 
+/// 提案影响分析里单个概念的受影响实例计数。
+#[derive(Debug, serde::Serialize)]
+pub struct ConceptImpact {
+    pub iri: String,
+    pub instance_count: u64,
+    /// 计数来源：agents / organizations / positions 表，或 events_index 事件类型索引
+    pub source: &'static str,
+}
+
+/// 治理提案影响分析报告（analyze_impact 的返回形态）。
+#[derive(Debug, serde::Serialize)]
+pub struct ImpactReport {
+    pub version: String,
+    pub status: String,
+    /// 提案 Turtle 临时装载进内嵌基线本体后的一致性（reasonable OWL 2 RL 口径）。
+    pub consistent_with_baseline: bool,
+    pub concepts: Vec<ConceptImpact>,
+    pub total_affected_instances: u64,
+    /// 近似口径说明（如实披露，不假装是完整 SPARQL 结果）。
+    pub notes: Vec<String>,
+}
+
+/// 提案 Turtle 中被定义/修改的概念 IRI：作为三元组主语出现的具名节点
+/// （去重、字典序，输出稳定）。纯函数，便于单测。
+pub fn proposal_concepts(turtle: &str) -> AppResult<Vec<String>> {
+    let triples = parse_turtle(turtle)?;
+    let mut concepts: Vec<String> = Vec::new();
+    for t in &triples {
+        if let oxrdf::NamedOrBlankNode::NamedNode(n) = &t.subject {
+            let iri = n.as_str().to_string();
+            if !concepts.contains(&iri) {
+                concepts.push(iri);
+            }
+        }
+    }
+    concepts.sort();
+    Ok(concepts)
+}
+
+/// 治理提案影响分析（AGENTS.md §8.7 的 analyze_impact，G4 接线落地）。
+///
+/// 流程：从 R2 取回该版本的提案 Turtle → 临时装载（内嵌基线本体 +
+/// 提案文本走 Owl2RlReasoner 一轮 OWL 2 RL，报一致性）→ 提取提案
+/// 定义/修改的概念 → 按概念统计现存实例数。
+///
+/// 近似点（如实标注，不假装完整 SPARQL）：
+/// - 实例层尚未全量入 RDF（G14 未引入 oxigraph、无 SPARQL 执行引擎），
+///   计数只能走结构化存储：Agent / Organization / Position 三个已知类
+///   查对应表，其余概念一律查 events_index 的事件类型计数（事件即其
+///   事件类的实例）；未被任何存储索引的概念计 0，表示「当前无可计数
+///   实例」，不表示语义上无影响。
+/// - 概念清单取「提案 Turtle 中作主语出现的具名 IRI」，仅作宾语被
+///   引用的概念不在清单内。
+pub async fn analyze_impact(env: &Env, version: &str) -> AppResult<ImpactReport> {
+    let db = env.d1("DB")?;
+    let row = d1::get_version(&db, version)
+        .await?
+        .ok_or_else(|| AppError::OntologyVersionNotFound(version.to_string()))?;
+    let domains = d1::get_version_domains(&db, version).await?;
+
+    // 取回提案本体文本（R2 只读，不改任何状态）
+    let bucket = env.bucket("R2")?;
+    let mut turtle = String::new();
+    for domain in &domains {
+        let key = r2::ontology_key(version, &format!("{domain}.ttl"));
+        let object = bucket
+            .get(&key)
+            .execute()
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("ontology file {key}")))?;
+        let body = object
+            .body()
+            .ok_or_else(|| AppError::Internal(format!("r2 object {key} has no body")))?;
+        let bytes = body.bytes().await?;
+        let text = String::from_utf8(bytes)
+            .map_err(|e| AppError::Internal(format!("ontology file {key} not utf8: {e}")))?;
+        turtle.push_str(&text);
+        turtle.push('\n');
+    }
+
+    // 临时装载：内嵌基线本体 + 提案文本一轮 OWL 2 RL，看一致性
+    let consistent = Owl2RlReasoner::build(&turtle)?.is_consistent();
+
+    let core_agent = format!("{}Agent", iri::CORE_NS);
+    let mut concepts = Vec::new();
+    let mut total: u64 = 0;
+    for concept in proposal_concepts(&turtle)? {
+        let (count, source) = if concept == iri::AGENT || concept == core_agent {
+            (d1::count_agents(&db).await?, "agents")
+        } else if concept == iri::ORGANIZATION {
+            (d1::count_organizations(&db).await?, "organizations")
+        } else if concept == iri::POSITION {
+            (d1::count_positions(&db).await?, "positions")
+        } else {
+            (d1::count_events_by_type(&db, &concept).await?, "events_index")
+        };
+        total += count;
+        concepts.push(ConceptImpact {
+            iri: concept,
+            instance_count: count,
+            source,
+        });
+    }
+
+    Ok(ImpactReport {
+        version: version.to_string(),
+        status: row.status,
+        consistent_with_baseline: consistent,
+        concepts,
+        total_affected_instances: total,
+        notes: vec![
+            "实例计数为近似口径：Agent/Organization/Position 查结构化表，其余概念查 events_index 事件类型计数；完整 SPARQL 实例层查询待 G14 评估 oxigraph 后接入".into(),
+            "概念清单 = 提案 Turtle 中作主语出现的具名 IRI；仅作宾语被引用的概念未计入".into(),
+        ],
+    })
+}
+
 /// 回滚到历史版本。目标必须存在于 history 中（不能滚到从未审批的版本）。
 pub async fn rollback(
     env: &Env,
@@ -466,6 +584,23 @@ mod tests {
         ] {
             assert!(file_domain(bad).is_err(), "{bad} should be rejected");
         }
+    }
+
+    #[wasm_bindgen_test]
+    fn proposal_concepts_extracts_named_subjects_deduped() {
+        let ttl = "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+                   <http://x.example/B> a owl:Class .\n\
+                   <http://x.example/A> a owl:Class .\n\
+                   <http://x.example/A> <http://x.example/p> <http://x.example/B> .\n";
+        // A 作主语出现两次只计一次；B 既作主语也作宾语，计入；输出字典序稳定
+        assert_eq!(
+            proposal_concepts(ttl).unwrap(),
+            vec![
+                "http://x.example/A".to_string(),
+                "http://x.example/B".to_string()
+            ]
+        );
+        assert!(proposal_concepts("<<<bad").is_err());
     }
 
     #[wasm_bindgen_test]
