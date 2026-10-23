@@ -234,7 +234,8 @@ ST=$(curl -s --max-time 10 "$BASE/api/agent/$AG")
 chk "激活后查询状态 = active" active "$(echo "$ST" | get status)"
 chk "重复激活 = 409" 409 "$(post_code "/api/agent/$AG/activate" "$ACTP" -H "x-admin-token: $ADMIN_TOKEN")"
 # 未付费的新分身（created、无 paid 订单）激活 → 409
-REG2=$(post /api/auth/register "{\"email\":\"smoke2-$RUN_ID@example.com\",\"narrative\":\"x\"}")
+P="{\"email\":\"smoke2-$RUN_ID@example.com\",\"narrative\":\"x\"}"
+REG2=$(post /api/auth/register "$P")
 AG2=$(echo "$REG2" | get agent_id)
 chk "未付费分身激活 = 409" 409 "$(post_code "/api/agent/$AG2/activate" "$ACTP" -H "x-admin-token: $ADMIN_TOKEN")"
 rm -rf "$TTL_DIR3"
@@ -243,21 +244,28 @@ rm -rf "$TTL_DIR3"
 echo "== 12. 积分转让 / 收益 / 兑换（AGENTS §5.7）"
 # ACC 当前余额 500（starter 已确认）。收款方用上面注册的第二账号 ACC2
 ACC2=$(echo "$REG2" | get account_id)
-chk "转让缺 token = 401" 401 "$(post_code /api/payment/transfer "{\"from_account_id\":\"$ACC\",\"to_account_id\":\"$ACC2\",\"amount\":200}")"
-TR=$(post /api/payment/transfer "{\"from_account_id\":\"$ACC\",\"to_account_id\":\"$ACC2\",\"amount\":200}" -H "x-admin-token: $ADMIN_TOKEN")
+P="{\"from_account_id\":\"$ACC\",\"to_account_id\":\"$ACC2\",\"amount\":200}"
+chk "转让缺 token = 401" 401 "$(post_code /api/payment/transfer "$P")"
+TR=$(post /api/payment/transfer "$P" -H "x-admin-token: $ADMIN_TOKEN")
 chk "转让后出账余额 = 300" 300 "$(echo "$TR" | get fromBalance)"
 chk "转让后入账余额 = 200" 200 "$(echo "$TR" | get toBalance)"
-chk "余额不足转让 = 409" 409 "$(post_code /api/payment/transfer "{\"from_account_id\":\"$ACC\",\"to_account_id\":\"$ACC2\",\"amount\":99999}" -H "x-admin-token: $ADMIN_TOKEN")"
-chk "自转让 = 400" 400 "$(post_code /api/payment/transfer "{\"from_account_id\":\"$ACC\",\"to_account_id\":\"$ACC\",\"amount\":10}" -H "x-admin-token: $ADMIN_TOKEN")"
-ER=$(post /api/admin/payment/agent-earnings "{\"agent_id\":\"$AG\",\"credits\":150,\"source_ref\":\"smoke-gig-1\"}" -H "x-admin-token: $ADMIN_TOKEN")
+P="{\"from_account_id\":\"$ACC\",\"to_account_id\":\"$ACC2\",\"amount\":99999}"
+chk "余额不足转让 = 409" 409 "$(post_code /api/payment/transfer "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+P="{\"from_account_id\":\"$ACC\",\"to_account_id\":\"$ACC\",\"amount\":10}"
+chk "自转让 = 400" 400 "$(post_code /api/payment/transfer "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+P="{\"agent_id\":\"$AG\",\"credits\":150,\"source_ref\":\"smoke-gig-1\"}"
+ER=$(post /api/admin/payment/agent-earnings "$P" -H "x-admin-token: $ADMIN_TOKEN")
 chk "agent 收益入账后余额 = 450" 450 "$(echo "$ER" | get newBalance)"
-RD=$(post /api/admin/payment/redeem "{\"account_id\":\"$ACC\",\"credits\":100}" -H "x-admin-token: $ADMIN_TOKEN")
+P="{\"account_id\":\"$ACC\",\"credits\":100}"
+RD=$(post /api/admin/payment/redeem "$P" -H "x-admin-token: $ADMIN_TOKEN")
 RDID=$(echo "$RD" | get requestId)
 chk "兑换金额 = 100 分（1 积分 = 1 分）" 100 "$(echo "$RD" | get amountCents)"
 chk "兑换申请冻结后余额 = 350" 350 "$(echo "$RD" | get newBalance)"
-STL=$(post "/api/admin/payment/redeem/$RDID/settle" "{\"payout_ref\":\"wxpay-smoke-1\"}" -H "x-admin-token: $ADMIN_TOKEN")
+P="{\"payout_ref\":\"wxpay-smoke-1\"}"
+STL=$(post "/api/admin/payment/redeem/$RDID/settle" "$P" -H "x-admin-token: $ADMIN_TOKEN")
 chk "兑换结算 = paid" paid "$(echo "$STL" | get status)"
-RD2=$(post /api/admin/payment/redeem "{\"account_id\":\"$ACC\",\"credits\":50}" -H "x-admin-token: $ADMIN_TOKEN")
+P="{\"account_id\":\"$ACC\",\"credits\":50}"
+RD2=$(post /api/admin/payment/redeem "$P" -H "x-admin-token: $ADMIN_TOKEN")
 RDID2=$(echo "$RD2" | get requestId)
 RJ=$(post "/api/admin/payment/redeem/$RDID2/reject" "{}" -H "x-admin-token: $ADMIN_TOKEN")
 chk "兑换驳回释放后余额 = 350" 350 "$(echo "$RJ" | get newBalance)"
@@ -265,26 +273,35 @@ chk "兑换驳回释放后余额 = 350" 350 "$(echo "$RJ" | get newBalance)"
 
 echo "== 13. 用户认证：邮箱验证码 + 会话 + 自助资金（G7）"
 OTPEMAIL="otp-$RUN_ID@example.com"
-START=$(post /api/auth/email/start "{\"email\":\"$OTPEMAIL\"}")
+P="{\"email\":\"$OTPEMAIL\"}"
+START=$(post /api/auth/email/start "$P")
 CODE=$(echo "$START" | get dev_code)
 chk "OTP 已发（dev 回显）" yes "$([ -n "$CODE" ] && echo yes || echo no)"
-chk "错误验证码 = 401" 401 "$(post_code /api/auth/email/verify "{\"email\":\"$OTPEMAIL\",\"code\":\"000000\"}")"
-VER=$(post /api/auth/email/verify "{\"email\":\"$OTPEMAIL\",\"code\":\"$CODE\"}")
+P="{\"email\":\"$OTPEMAIL\",\"code\":\"000000\"}"
+chk "错误验证码 = 401" 401 "$(post_code /api/auth/email/verify "$P")"
+P="{\"email\":\"$OTPEMAIL\",\"code\":\"$CODE\"}"
+VER=$(post /api/auth/email/verify "$P")
 TOKEN2=$(echo "$VER" | get token)
 ACC3=$(echo "$VER" | get account_id)
 chk "验证成功下发会话" yes "$([ -n "$TOKEN2" ] && echo yes || echo no)"
-chk "验证码不可重放 = 400" 400 "$(post_code /api/auth/email/verify "{\"email\":\"$OTPEMAIL\",\"code\":\"$CODE\"}")"
+P="{\"email\":\"$OTPEMAIL\",\"code\":\"$CODE\"}"
+chk "验证码不可重放 = 400" 400 "$(post_code /api/auth/email/verify "$P")"
 chk "无会话访问 /api/me = 401" 401 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE/api/me")"
 ME=$(curl -s --max-time 10 "$BASE/api/me" -H "Authorization: Bearer $TOKEN2")
 chk "/api/me 邮箱一致" "$OTPEMAIL" "$(echo "$ME" | get email)"
-NA=$(post /api/agent "{\"narrative\":\"otp smoke agent\"}" -H "Authorization: Bearer $TOKEN2")
+P="{\"narrative\":\"otp smoke agent\"}"
+NA=$(post /api/agent "$P" -H "Authorization: Bearer $TOKEN2")
 AG3=$(echo "$NA" | get agent_id)
 chk "会话建分身 = created" created "$(echo "$NA" | get status)"
-chk "重复建分身 = 409" 409 "$(post_code /api/agent "{\"narrative\":\"again\"}" -H "Authorization: Bearer $TOKEN2")"
-post /api/admin/payment/agent-earnings "{\"agent_id\":\"$AG3\",\"credits\":120,\"source_ref\":\"smoke-g7\"}" -H "x-admin-token: $ADMIN_TOKEN" >/dev/null
-RD3=$(post /api/me/redeem "{\"credits\":40}" -H "Authorization: Bearer $TOKEN2")
+P="{\"narrative\":\"again\"}"
+chk "重复建分身 = 409" 409 "$(post_code /api/agent "$P" -H "Authorization: Bearer $TOKEN2")"
+P="{\"agent_id\":\"$AG3\",\"credits\":120,\"source_ref\":\"smoke-g7\"}"
+post /api/admin/payment/agent-earnings "$P" -H "x-admin-token: $ADMIN_TOKEN" >/dev/null
+P="{\"credits\":40}"
+RD3=$(post /api/me/redeem "$P" -H "Authorization: Bearer $TOKEN2")
 chk "自助兑换后余额 = 80" 80 "$(echo "$RD3" | get newBalance)"
-TR3=$(post /api/me/transfer "{\"to_account_id\":\"$ACC\",\"amount\":30}" -H "Authorization: Bearer $TOKEN2")
+P="{\"to_account_id\":\"$ACC\",\"amount\":30}"
+TR3=$(post /api/me/transfer "$P" -H "Authorization: Bearer $TOKEN2")
 chk "自助转让后余额 = 50" 50 "$(echo "$TR3" | get fromBalance)"
 ACTX=$(python3 -c "import json;print(json.dumps({'agent_id':'$AG','action_type':'work','params':{'rdf':'<urn:a> <urn:b> <urn:c> .'}}))")
 chk "跨账号会话提交行动 = 403" 403 "$(post_code /api/action "$ACTX" -H "Authorization: Bearer $TOKEN2")"
