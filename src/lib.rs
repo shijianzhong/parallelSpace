@@ -33,6 +33,30 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/api/auth/register", |req, ctx| async move {
             api::into_router_result(api::auth::register(req, ctx).await)
         })
+        .post_async("/api/auth/email/start", |req, ctx| async move {
+            api::into_router_result(api::auth::email_start(req, ctx).await)
+        })
+        .post_async("/api/auth/email/verify", |req, ctx| async move {
+            api::into_router_result(api::auth::email_verify(req, ctx).await)
+        })
+        .get_async("/api/auth/oauth/:provider/start", |req, ctx| async move {
+            api::into_router_result(api::oauth::start(req, ctx).await)
+        })
+        .get_async("/api/auth/oauth/:provider/callback", |req, ctx| async move {
+            api::into_router_result(api::oauth::callback(req, ctx).await)
+        })
+        .post_async("/api/agent", |req, ctx| async move {
+            api::into_router_result(api::auth::create_agent(req, ctx).await)
+        })
+        .get_async("/api/me", |req, ctx| async move {
+            api::into_router_result(api::auth::me(req, ctx).await)
+        })
+        .post_async("/api/me/transfer", |req, ctx| async move {
+            api::into_router_result(api::payment::me_transfer(req, ctx).await)
+        })
+        .post_async("/api/me/redeem", |req, ctx| async move {
+            api::into_router_result(api::payment::me_redeem(req, ctx).await)
+        })
         .get_async("/api/agent/:id", |req, ctx| async move {
             api::into_router_result(api::agent::get_agent(req, ctx).await)
         })

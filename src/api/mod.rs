@@ -6,7 +6,9 @@ pub mod agent;
 pub mod auth;
 pub mod map;
 pub mod org;
+pub mod oauth;
 pub mod payment;
+pub mod session;
 
 use worker::{Request, Response, RouteContext};
 

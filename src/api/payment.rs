@@ -301,3 +301,47 @@ pub async fn redeem_reject(req: worker::Request, ctx: RouteContext<()>) -> AppRe
         "newBalance": r.new_balance,
     }))
 }
+
+// ---------- 用户自助资金操作（需会话，G7 后开放；复用 §5.7 账本函数） ----------
+
+#[derive(Debug, Deserialize)]
+pub struct MeTransferInput {
+    pub to_account_id: String,
+    pub amount: i64,
+}
+
+/// 自助转让：POST /api/me/transfer（出账方固定为会话账号，不可代转）。
+pub async fn me_transfer(mut req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    let env = ctx.env.clone();
+    let from = crate::api::session::require_session(&req, &env).await?;
+    let input: MeTransferInput = json_body(&mut req).await?;
+    let r = credit::transfer_credits(&env, &from, &input.to_account_id, input.amount).await?;
+    json_ok(serde_json::json!({
+        "fromAccountId": from,
+        "toAccountId": input.to_account_id,
+        "amount": input.amount,
+        "fromBalance": r.from_balance,
+        "toBalance": r.to_balance,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MeRedeemInput {
+    pub credits: i64,
+}
+
+/// 自助兑换申请：POST /api/me/redeem（冻结后仍走 admin 审批 settle/reject）。
+pub async fn me_redeem(mut req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    let env = ctx.env.clone();
+    let account_id = crate::api::session::require_session(&req, &env).await?;
+    let input: MeRedeemInput = json_body(&mut req).await?;
+    let r = credit::request_redeem(&env, &account_id, input.credits).await?;
+    json_ok(serde_json::json!({
+        "requestId": r.request_id,
+        "accountId": r.account_id,
+        "credits": r.credits,
+        "amountCents": r.amount_cents,
+        "status": r.status,
+        "newBalance": r.new_balance,
+    }))
+}

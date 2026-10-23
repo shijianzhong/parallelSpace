@@ -109,3 +109,9 @@
 **注册流程改造**：现 `POST /api/auth/register`（邮箱直建账号+分身）拆为两步——先登录（建账号壳），再 `POST /api/agent`（需会话）提交出身叙述建分身；旧 register 仅保留给 smoke 并标注内部用途，试运行前关闭其公网路由。
 
 **鉴权落点**：action / org / agent 激活后的自助操作（转让、兑换、收件箱审批）一律校验「会话账号 == 分身 account_id」；治理类（publish/approve/confirm/agent-earnings 代办）仍走 admin token / Access，两套体系互不替代。G13 的治理身份记录可直接复用 Access 签发的邮箱身份，`approved_by` 改为服务端从 JWT 取，不再收请求体自由文本。
+
+## 七、G7 落地记录（2026-10-23）
+
+- **已实现**：migration 0004 `user_identities`；邮箱 OTP（Resend 发信 / 未配密钥时日志模式，dev 回显需 `ALLOW_DEV_OTP_ECHO=true` 且仅限本地）；KV 会话（Cookie + Bearer，30 天）；Google/GitHub OAuth 全流程（state 防 CSRF、已验证邮箱、同邮箱关联）；注册拆分（`POST /api/agent` 需会话建分身，旧 register 保留为内部兼容）；`GET /api/me`；自助转让/兑换（`/api/me/transfer`、`/api/me/redeem`，复用 §5.7 账本函数，出账方固定为会话账号）；action 归属校验（过渡模式 + `REQUIRE_AUTH` 开关）。
+- **验收**：smoke 新增第 13 节 11 项，全量 **78 通过 / 0 失败**；单测 89 不变；clippy 0 warning。
+- **遗留**：OAuth 未用真实 client id/secret 端到端验证（需部署时配置）；org 创建接口没有创始人字段，归属校验暂无落点，随 G4 接线时补 founder 绑定；`REQUIRE_AUTH` 默认关，试运行部署清单里必须打开并关闭旧 register 公网路由；Access 侧配置随 G11 部署执行。

@@ -179,6 +179,17 @@ src/
 - **agent 收益的边界**：能兑换/转让的是已结算到账号的积分；society 内部的 money 转移仍走社会内账本（事件 + agent_state），不直接等同法币。收益结算引擎（G16）未落地前，收益入账由 admin 代办接口触发同一函数。
 - **合规提示（上线前必办，非代码事项）**：可转让 + 可兑换使积分具备资金属性，真实运营前需处理支付牌照、反洗钱/KYC、税务代扣等问题；代码层以 admin 审批、全量流水、无套利汇率三件套兜底，不能替代合规本身。
 
+
+#### 5.8 用户认证与会话（G7，2026-10-23 落地）
+
+登录方案定版见 docs/GAPS_AND_PLAN.md 第六节。实现约束：
+
+- **两套凭证互不替代**：用户会话（KV `session:{token}`，Cookie `ps_session` 或 Bearer）只认普通用户；治理口继续走 admin token / Cloudflare Access。任何 handler 不得用会话代替 admin 校验，反之亦然。
+- **OTP 红线**：验证码只存哈希（pepper 来自 ADMIN_TOKEN secret）、10 分钟 TTL、最多试 5 次、发送间隔 60 秒、验证成功即删。日志模式（未配 RESEND_API_KEY）下验证码**只进 worker 日志、绝不进响应**；唯一的例外是本地开发显式设置 `ALLOW_DEV_OTP_ECHO=true`，该变量严禁出现在任何线上环境。
+- **OAuth**：state 必须存 KV 并在回调时比对后删除；只接受已验证邮箱（Google 看 `email_verified`，GitHub 走 `/user/emails` 取 primary+verified）；身份绑定以 `(provider, provider_subject)` 唯一，同邮箱关联同一账号，不许抢绑覆盖。
+- **归属校验**：action 等以 agent 为主体的接口走 `session::enforce_ownership`——带会话必须与分身归属一致；`REQUIRE_AUTH=true`（试运行部署时打开）后无会话一律 401。自助资金接口（/api/me/*）的出账方固定取会话账号，请求体不得指定 from。
+- **注册拆分**：新流程为登录（建账号壳）→ `POST /api/agent`（需会话）建分身；旧 `/api/auth/register` 仅作内部/smoke 兼容，试运行部署时关闭其公网路由。
+
 ### 6. 核心接口约定
 
 #### 6.1 行动提交

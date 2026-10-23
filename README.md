@@ -200,7 +200,7 @@ bash scripts/smoke.sh
 | 迁移 SQL（0002） | `wrangler d1 migrations apply <db> --local` | 域注册表 + versions 状态列 + 五域种子就位 |
 | Workers 打包 | `worker-build --release` | wasm + shim.mjs 产出成功 |
 | 本地运行时 | `wrangler dev --local` | 10 个绑定全部就绪，`/health` 200 |
-| 端到端冒烟 | `bash scripts/smoke.sh` | **67 通过 / 0 失败** |
+| 端到端冒烟 | `bash scripts/smoke.sh` | **78 通过 / 0 失败** |
 
 冒烟覆盖：注册 → 下单（服务端定价、忽略客户端金额、无账号 404）→ admin 令牌 401 →
 金额二次核对 409 → 入账 500 积分 → 幂等重放（余额不变）→ 同一流水号复用 409 →
@@ -252,8 +252,9 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
 - Cron tick（唤醒集合 = 本 tick 事件 actor ∪ active/idle 心跳）+ Queue 消费、KV 热状态/配额/缓存、R2 事件日志
 - 注册 / 查询 / 激活 / 行动 / 组织 / 地图 / 下单 / 支付确认 / 本体域注册 / 提案 / 审批 / 回滚 API
 - 积分转让 / agent 收益入账 / 兑换申请与审批（2026-10-23 定调：积分可转让、可兑换，admin 代办，规则见 AGENTS §5.7）
+- 用户认证（G7）：邮箱验证码 + Google/GitHub OAuth + KV 会话、登录后建分身、/api/me、自助转让/兑换、行动归属校验（AGENTS §5.8）
 - 错误响应统一 JSON `{"error":"<CODE>","message":"..."}`，5xx 不外泄内部细节
-- 49 个 Rust 文件、89 个单测、67 项端到端断言
+- 50 个 Rust 源文件、89 个单测、78 项端到端断言
 - L0 中立宪法草案 `l0-constitution/core.ttl`（rdflib 实测：140 三元组、9 原语、零 imports、零人类模板泄漏）
 
 ---

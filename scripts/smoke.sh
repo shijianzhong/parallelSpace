@@ -8,6 +8,7 @@
 # 需要 .dev.vars：
 #   ADMIN_TOKEN=dev-admin-token
 #   MANUAL_WECHAT_QR_URL=https://example.com/qr.png
+#   ALLOW_DEV_OTP_ECHO=true   （仅本地：OTP 日志模式下回显验证码，供第 13 节）
 #
 # 两个脚本自身的历史坑（改脚本时别踩回去）：
 # 1) macOS 自带 bash 3.2 对 `"$( cmd "arg" )"` 这种「双引号里再套双引号」解析有 bug，
@@ -260,6 +261,33 @@ RD2=$(post /api/admin/payment/redeem "{\"account_id\":\"$ACC\",\"credits\":50}" 
 RDID2=$(echo "$RD2" | get requestId)
 RJ=$(post "/api/admin/payment/redeem/$RDID2/reject" "{}" -H "x-admin-token: $ADMIN_TOKEN")
 chk "兑换驳回释放后余额 = 350" 350 "$(echo "$RJ" | get newBalance)"
+
+
+echo "== 13. 用户认证：邮箱验证码 + 会话 + 自助资金（G7）"
+OTPEMAIL="otp-$RUN_ID@example.com"
+START=$(post /api/auth/email/start "{\"email\":\"$OTPEMAIL\"}")
+CODE=$(echo "$START" | get dev_code)
+chk "OTP 已发（dev 回显）" yes "$([ -n "$CODE" ] && echo yes || echo no)"
+chk "错误验证码 = 401" 401 "$(post_code /api/auth/email/verify "{\"email\":\"$OTPEMAIL\",\"code\":\"000000\"}")"
+VER=$(post /api/auth/email/verify "{\"email\":\"$OTPEMAIL\",\"code\":\"$CODE\"}")
+TOKEN2=$(echo "$VER" | get token)
+ACC3=$(echo "$VER" | get account_id)
+chk "验证成功下发会话" yes "$([ -n "$TOKEN2" ] && echo yes || echo no)"
+chk "验证码不可重放 = 400" 400 "$(post_code /api/auth/email/verify "{\"email\":\"$OTPEMAIL\",\"code\":\"$CODE\"}")"
+chk "无会话访问 /api/me = 401" 401 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE/api/me")"
+ME=$(curl -s --max-time 10 "$BASE/api/me" -H "Authorization: Bearer $TOKEN2")
+chk "/api/me 邮箱一致" "$OTPEMAIL" "$(echo "$ME" | get email)"
+NA=$(post /api/agent "{\"narrative\":\"otp smoke agent\"}" -H "Authorization: Bearer $TOKEN2")
+AG3=$(echo "$NA" | get agent_id)
+chk "会话建分身 = created" created "$(echo "$NA" | get status)"
+chk "重复建分身 = 409" 409 "$(post_code /api/agent "{\"narrative\":\"again\"}" -H "Authorization: Bearer $TOKEN2")"
+post /api/admin/payment/agent-earnings "{\"agent_id\":\"$AG3\",\"credits\":120,\"source_ref\":\"smoke-g7\"}" -H "x-admin-token: $ADMIN_TOKEN" >/dev/null
+RD3=$(post /api/me/redeem "{\"credits\":40}" -H "Authorization: Bearer $TOKEN2")
+chk "自助兑换后余额 = 80" 80 "$(echo "$RD3" | get newBalance)"
+TR3=$(post /api/me/transfer "{\"to_account_id\":\"$ACC\",\"amount\":30}" -H "Authorization: Bearer $TOKEN2")
+chk "自助转让后余额 = 50" 50 "$(echo "$TR3" | get fromBalance)"
+ACTX=$(python3 -c "import json;print(json.dumps({'agent_id':'$AG','action_type':'work','params':{'rdf':'<urn:a> <urn:b> <urn:c> .'}}))")
+chk "跨账号会话提交行动 = 403" 403 "$(post_code /api/action "$ACTX" -H "Authorization: Bearer $TOKEN2")"
 
 echo
 echo "结果：$pass 通过 / $fail 失败"

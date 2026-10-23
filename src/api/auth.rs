@@ -72,3 +72,182 @@ pub async fn register(mut req: worker::Request, ctx: RouteContext<()>) -> AppRes
         "next": "payment_required",
     }))?)
 }
+
+// ---------- G7：邮箱验证码登录 + 会话后建分身 + /api/me ----------
+
+use crate::api::session::{self, OtpStart};
+use crate::common::types::now_rfc3339;
+use crate::storage::kv;
+
+#[derive(Debug, Deserialize)]
+pub struct EmailStartInput {
+    pub email: String,
+}
+
+fn normalize_email(raw: &str) -> AppResult<String> {
+    let email = sanitize_text(raw, 254).to_lowercase();
+    if !email.contains('@') || email.len() < 3 {
+        return Err(AppError::InvalidInput("invalid email".into()));
+    }
+    Ok(email)
+}
+
+/// 找回或创建账号，并绑定 email 身份（OTP 与 OAuth 共用落点）。
+pub(crate) async fn resolve_or_create_account(
+    env: &worker::Env,
+    provider: &str,
+    subject: &str,
+    email: &str,
+) -> AppResult<String> {
+    let db = env.d1("DB")?;
+    if let Some(acc) = d1::get_identity_account(&db, provider, subject).await? {
+        return Ok(acc);
+    }
+    let account_id = match d1::get_account_by_email(&db, email).await? {
+        Some(a) => a.id,
+        None => {
+            let id = ulid::Ulid::generate().to_string();
+            d1::create_account(&db, &id, email).await?;
+            id
+        }
+    };
+    d1::link_identity(&db, &account_id, provider, subject, email, &now_rfc3339()).await?;
+    Ok(account_id)
+}
+
+pub(crate) async fn respond_with_session(
+    env: &worker::Env,
+    account_id: &str,
+    extra: serde_json::Value,
+) -> AppResult<Response> {
+    let token = session::issue_session(env, account_id).await?;
+    let db = env.d1("DB")?;
+    let agent = d1::get_agent_by_account(&db, account_id).await?;
+    let mut body = serde_json::json!({
+        "account_id": account_id,
+        "token": token,
+        "has_agent": agent.is_some(),
+        "agent_id": agent.as_ref().map(|a| a.id.clone()),
+        "agent_status": agent.as_ref().map(|a| a.status.clone()),
+    });
+    if let (Some(obj), Some(ext)) = (body.as_object_mut(), extra.as_object()) {
+        for (k, v) in ext {
+            obj.insert(k.clone(), v.clone());
+        }
+    }
+    let mut resp = Response::from_json(&body)?;
+    resp.headers_mut()
+        .set("set-cookie", &session::session_cookie(&token))?;
+    Ok(resp)
+}
+
+/// 发送登录验证码：POST /api/auth/email/start。
+pub async fn email_start(mut req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    let input: EmailStartInput = json_body(&mut req).await?;
+    let email = normalize_email(&input.email)?;
+    let env = ctx.env.clone();
+    match session::start_otp(&env, &email).await? {
+        OtpStart::Sent => Ok(Response::from_json(&serde_json::json!({ "sent": true }))?),
+        OtpStart::LogOnly(code) => {
+            let mut body = serde_json::json!({ "sent": true, "mail_mode": "log_only" });
+            if session::dev_echo_allowed(&env, true) {
+                body["dev_code"] = serde_json::Value::String(code);
+            }
+            Ok(Response::from_json(&body)?)
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EmailVerifyInput {
+    pub email: String,
+    pub code: String,
+}
+
+/// 校验登录验证码并下发会话：POST /api/auth/email/verify。
+pub async fn email_verify(mut req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    let input: EmailVerifyInput = json_body(&mut req).await?;
+    let email = normalize_email(&input.email)?;
+    let env = ctx.env.clone();
+    session::verify_otp(&env, &email, input.code.trim()).await?;
+    let account_id = resolve_or_create_account(&env, "email", &email, &email).await?;
+    crate::governance::audit::record(
+        &env,
+        "auth.login",
+        serde_json::json!({ "account_id": account_id, "provider": "email" }),
+    )
+    .await?;
+    respond_with_session(&env, &account_id, serde_json::json!({})).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateAgentInput {
+    pub narrative: String,
+}
+
+/// 登录后创建分身（出生态）：POST /api/agent（需会话）。
+/// 一账号一分身（MVP）；已有分身返回 409。
+pub async fn create_agent(mut req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    let env = ctx.env.clone();
+    let account_id = session::require_session(&req, &env).await?;
+    let input: CreateAgentInput = json_body(&mut req).await?;
+    let narrative = sanitize_text(&input.narrative, 4000);
+    if narrative.is_empty() {
+        return Err(AppError::InvalidInput("narrative required".into()));
+    }
+    let db = env.d1("DB")?;
+    if d1::get_agent_by_account(&db, &account_id).await?.is_some() {
+        return Err(AppError::Conflict("account already has an agent".into()));
+    }
+    let router = OntologyRouter::from_env(&env).await?;
+    let agent_id = ulid::Ulid::generate().to_string();
+    d1::create_agent(&db, &agent_id, &account_id, router.for_action().as_str()).await?;
+    crate::governance::audit::record(
+        &env,
+        "auth.agent_created",
+        serde_json::json!({ "account_id": account_id, "agent_id": agent_id }),
+    )
+    .await?;
+    Ok(Response::from_json(&serde_json::json!({
+        "account_id": account_id,
+        "agent_id": agent_id,
+        "status": "created",
+        "next": "payment_required",
+    }))?)
+}
+
+/// 当前账号总览：GET /api/me（需会话）。首页分身卡的数据源。
+pub async fn me(req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    let env = ctx.env.clone();
+    let account_id = session::require_session(&req, &env).await?;
+    let db = env.d1("DB")?;
+    let account = d1::get_account(&db, &account_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("account".into()))?;
+    let credits = d1::get_credit_account(&db, &account_id)
+        .await?
+        .map(|a| a.balance)
+        .unwrap_or(0);
+    let agent_json = match d1::get_agent_by_account(&db, &account_id).await? {
+        Some(a) => {
+            let hot = match env.kv("KV") {
+                Ok(store) => kv::get_hot_state(&store, &a.id).await.ok(),
+                Err(_) => None,
+            };
+            serde_json::json!({
+                "id": a.id,
+                "status": a.status,
+                "hot_state": hot.map(|h| serde_json::json!({
+                    "money": h.money, "food": h.food, "energy": h.energy, "reputation": h.reputation
+                })),
+            })
+        }
+        None => serde_json::Value::Null,
+    };
+    Ok(Response::from_json(&serde_json::json!({
+        "account_id": account.id,
+        "email": account.email,
+        "credits": credits,
+        "agent": agent_json,
+    }))?)
+}

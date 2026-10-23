@@ -34,6 +34,9 @@ pub async fn submit(mut req: worker::Request, ctx: RouteContext<()>) -> AppResul
     let action: ActionRequest = json_body(&mut req).await?;
     let env = ctx.env.clone();
 
+    // G7 归属校验（过渡模式）：带会话必须与分身归属一致； REQUIRE_AUTH=true 时强制会话
+    crate::api::session::enforce_ownership(&req, &env, &action.agent_id).await?;
+
     // RDF 负载：MVP 由 params.rdf 携带（Turtle）
     let rdf_payload = extract_rdf_payload(&action);
 

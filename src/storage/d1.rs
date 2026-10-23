@@ -93,6 +93,49 @@ pub async fn get_account_by_email(db: &D1Database, email: &str) -> AppResult<Opt
 }
 
 /// 账号是否存在（下单前置校验，避免外键错误以 500 形式暴露）。
+pub async fn get_account(db: &D1Database, id: &str) -> AppResult<Option<AccountRow>> {
+    let stmt = db
+        .prepare("SELECT id, email, created_at, risk_score FROM accounts WHERE id = ?1")
+        .bind(&[s(id)])?;
+    Ok(stmt.first(None).await?)
+}
+
+/// 查登录身份绑定的账号（G7 user_identities）。
+pub async fn get_identity_account(
+    db: &D1Database,
+    provider: &str,
+    subject: &str,
+) -> AppResult<Option<String>> {
+    let stmt = db
+        .prepare("SELECT account_id FROM user_identities WHERE provider = ?1 AND provider_subject = ?2")
+        .bind(&[s(provider), s(subject)])?;
+    #[derive(Deserialize)]
+    struct IdentityAccountRow {
+        account_id: String,
+    }
+    let row: Option<IdentityAccountRow> = stmt.first(None).await?;
+    Ok(row.map(|r| r.account_id))
+}
+
+/// 绑定登录身份到账号（已存在同 provider+subject 时不覆盖，防抢绑）。
+pub async fn link_identity(
+    db: &D1Database,
+    account_id: &str,
+    provider: &str,
+    subject: &str,
+    email: &str,
+    now: &str,
+) -> AppResult<()> {
+    db.prepare(
+        "INSERT INTO user_identities (account_id, provider, provider_subject, email, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(provider, provider_subject) DO NOTHING",
+    )
+    .bind(&[s(account_id), s(provider), s(subject), s(email), s(now)])?
+    .run()
+    .await?;
+    Ok(())
+}
+
 pub async fn account_exists(db: &D1Database, account_id: &str) -> AppResult<bool> {
     #[derive(serde::Deserialize)]
     struct Row {
