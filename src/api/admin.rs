@@ -56,6 +56,19 @@ pub struct SandboxRunInput {
     pub ticks: u64,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CreateLocationInput {
+    /// 地点 id（core:Location 的可指称名）；省略时生成 ULID。
+    #[serde(default)]
+    pub id: Option<String>,
+    pub name: String,
+    pub lon: f64,
+    pub lat: f64,
+    /// GeoJSON Polygon 外环 `[[lon,lat],...]`；省略则只有代表点。
+    #[serde(default)]
+    pub polygon: Option<serde_json::Value>,
+}
+
 pub(crate) fn check_admin(req: &worker::Request, ctx: &RouteContext<()>) -> Result<()> {
     let expected = ctx
         .env
@@ -201,6 +214,56 @@ pub async fn file_arbitration_case(
     Ok(Response::from_json(&serde_json::json!({
         "case_id": case_id,
         "status": "filed",
+    }))?)
+}
+
+/// 创建地点（G8 位置数据模型）：地点是可指称位置（core:Location），
+/// 坐标只是渲染投影、不进本体公理（AGENTS.md §8.5）。地点只能经治理
+/// 通道创建——系统不预置任何地点数据，地图在无地点时返回空集。
+/// id 已存在 → 409；坐标出 WGS84 范围或 polygon 不合法 → 400。
+pub async fn create_location(mut req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    check_admin(&req, &ctx).map_err(|_| AppError::Unauthorized)?;
+    let input: CreateLocationInput = json_body(&mut req).await?;
+    let env = ctx.env.clone();
+    let db = env.d1("DB")?;
+
+    let name = crate::governance::validator::sanitize_text(&input.name, 128);
+    if name.is_empty() {
+        return Err(AppError::InvalidInput("location name required".into()));
+    }
+    crate::api::map::validate_lon_lat(input.lon, input.lat)?;
+    let polygon_json = match &input.polygon {
+        Some(raw) => {
+            let ring = crate::api::map::normalize_polygon(raw)?;
+            Some(serde_json::to_string(&ring).map_err(|e| AppError::Internal(e.to_string()))?)
+        }
+        None => None,
+    };
+    let id = input
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| ulid::Ulid::generate().to_string());
+    if d1::get_location(&db, &id).await?.is_some() {
+        return Err(AppError::Conflict(format!("location {id} already exists")));
+    }
+    d1::create_location(&db, &id, &name, input.lon, input.lat, polygon_json.as_deref()).await?;
+    crate::governance::audit::record(
+        &env,
+        "location.created",
+        serde_json::json!({ "location_id": id, "name": name }),
+    )
+    .await?;
+
+    let loc = d1::get_location(&db, &id)
+        .await?
+        .ok_or_else(|| AppError::Internal("location vanished after insert".into()))?;
+    Ok(Response::from_json(&serde_json::json!({
+        "location_id": loc.id,
+        "name": loc.name,
+        "geometry": crate::api::map::location_geometry(&loc),
     }))?)
 }
 

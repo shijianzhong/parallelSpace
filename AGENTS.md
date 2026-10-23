@@ -546,7 +546,7 @@ agent 行为模式 ──LLM 概念化──> ChangeProposal(targetLayer = L1 | 
 ### 10. 已知边界（生成代码时不得掩盖，须在注释 / 文档中如实标注）
 
 - LLM 上游未接：概念化执行者缺位，新概念不会自动生成，只能治理员手动提案。
-- L3 本体引擎未接、oxigraph 未引入、Durable Objects WebSocket 为占位。
+- L3 本体引擎未接、oxigraph 未引入。Durable Objects WebSocket 已接通（G8）：事件落盘后经单例 hub 广播，hub 无订阅鉴权、前端 MapLibre 未做。
 - `core.ttl` 仍是草案未进构建；五域仍是实现基线（L2 seed 定位）。
 - 审批由 admin token 持有者执行，无独立治理身份。
 - 仅在 miniflare 本地态验证，未在真实 Cloudflare Paid 账号部署；D1 事务与 Queues 线上语义以真实环境为准。

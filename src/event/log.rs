@@ -61,5 +61,11 @@ pub async fn append(
         ontology_version,
     )
     .await?;
+
+    // G8：事件已落盘后向 WebSocket hub 广播（best-effort 分发通道，
+    // 不是第二事实源；失败只记日志，见 storage::do_state::notify_world）。
+    if let Ok(record_json) = serde_json::to_string(&record) {
+        crate::storage::do_state::notify_world(env, &record_json).await;
+    }
     Ok(())
 }

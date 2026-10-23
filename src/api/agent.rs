@@ -39,6 +39,11 @@ pub struct ActivateInput {
     /// 可省略：省略（或空白）时用注册落库的已存 card（G5）；都无则报错。
     #[serde(default)]
     pub person_card_rdf: Option<String>,
+    /// 出生落点（G8）：locations 表中已存在的地点 id，激活时写入
+    /// agents.location_id（core:locatedAt）。可省略——locatedAt 是可选
+    /// 属性，无公理要求分身必须有位置；给了但地点不存在 → 400。
+    #[serde(default)]
+    pub location_id: Option<String>,
 }
 
 /// 激活分身：pending → active（治理员执行）。
@@ -124,6 +129,20 @@ pub async fn activate(mut req: worker::Request, ctx: RouteContext<()>) -> AppRes
         )));
     }
 
+    // 出生落点（G8）：给了 location_id 就必须指向真实存在的地点，
+    // 不造位置、不静默忽略——与 PersonCard 一样在迁移前完成全部校验。
+    let location_id = input
+        .location_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    if let Some(loc) = &location_id {
+        if d1::get_location(&db, loc).await?.is_none() {
+            return Err(AppError::InvalidInput(format!("unknown location_id: {loc}")));
+        }
+    }
+
     let validation = crate::ontology::shacl::validate_person_card(&person_card_rdf)?;
     if !validation.ok {
         let resp = Response::from_json(&serde_json::json!({
@@ -146,6 +165,11 @@ pub async fn activate(mut req: worker::Request, ctx: RouteContext<()>) -> AppRes
         )));
     }
 
+    // 出生落点写入（G8）：状态迁移成功后才落位置，避免给未激活分身写位置。
+    if let Some(loc) = &location_id {
+        d1::set_agent_location(&db, &agent_id, loc).await?;
+    }
+
     // AgentActivated 事件（append-only；版本由 OntologyRouter 注入）
     let router = OntologyRouter::from_env(&env).await?;
     let event_id = ulid::Ulid::generate().to_string();
@@ -162,6 +186,7 @@ pub async fn activate(mut req: worker::Request, ctx: RouteContext<()>) -> AppRes
             "account_id": agent.account_id,
             "from": "pending",
             "to": "active",
+            "location_id": location_id,
         }),
     )
     .await?;
@@ -176,5 +201,6 @@ pub async fn activate(mut req: worker::Request, ctx: RouteContext<()>) -> AppRes
         "agent_id": agent_id,
         "status": "active",
         "event_id": event_id,
+        "location_id": location_id,
     }))?)
 }

@@ -459,6 +459,92 @@ chk "无会话建组织创始人 = 入参" "$ACC" "$(echo "$ORG2" | get founder_
 P="{\"name\":\"smoke-org3-$RUN_ID\",\"charter_id\":\"charter-$RUN_ID\",\"founder_account_id\":\"$ACC\"}"
 chk "会话冒名创始人 = 403" 403 "$(post_code /api/org "$P" -H "Authorization: Bearer $TOKEN2")"
 
+echo "== 16. G8 位置与地图几何 / WebSocket 广播"
+# 地点：治理通道创建（系统不预置地点数据）；id 每次运行唯一避免重跑冲突
+LOC1="loc-a-$RUN_ID"
+LOC2="loc-b-$RUN_ID"
+P="{\"id\":\"$LOC1\",\"name\":\"港区\",\"lon\":116.40,\"lat\":39.90,\"polygon\":[[116.39,39.89],[116.41,39.89],[116.41,39.91],[116.39,39.91]]}"
+chk "建地点缺 admin token = 401" 401 "$(post_code /api/admin/locations "$P")"
+LC1=$(post /api/admin/locations "$P" -H "x-admin-token: $ADMIN_TOKEN")
+chk "建地点返回 location_id" "$LOC1" "$(echo "$LC1" | get location_id)"
+chk "带 polygon 的地点 geometry = Polygon" Polygon "$(echo "$LC1" | python3 -c "import sys,json;print(json.load(sys.stdin)['geometry']['type'])" 2>/dev/null || echo none)"
+chk "重复 id 建地点 = 409" 409 "$(post_code /api/admin/locations "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+P='{"name":"bad","lon":1,"lat":999}'
+chk "非法坐标建地点 = 400" 400 "$(post_code /api/admin/locations "$P" -H "x-admin-token: $ADMIN_TOKEN")"
+P="{\"id\":\"$LOC2\",\"name\":\"山丘\",\"lon\":117.00,\"lat\":40.00}"
+post /api/admin/locations "$P" -H "x-admin-token: $ADMIN_TOKEN" >/dev/null
+LOCS=$(curl -s --max-time 10 "$BASE/api/map/locations")
+chk "地点图层含新建地点" yes "$(echo "$LOCS" | python3 -c "import sys,json;d=json.load(sys.stdin);print('yes' if any(f['properties']['location_id']=='$LOC1' and f['geometry'] and f['geometry']['type']=='Polygon' for f in d['features']) else 'no')" 2>/dev/null || echo no)"
+# 新分身：注册 → 下单 → 确认（推进 pending）→ 带落点激活
+P="{\"email\":\"smoke16-$RUN_ID@example.com\",\"narrative\":\"x\"}"
+REG16=$(post /api/auth/register "$P")
+ACC16=$(echo "$REG16" | get account_id)
+AG16=$(echo "$REG16" | get agent_id)
+P="{\"account_id\":\"$ACC16\",\"package_id\":\"starter\"}"
+ORD16=$(post /api/payment/order "$P")
+OID16=$(echo "$ORD16" | get order_id)
+P="{\"order_id\":\"$OID16\",\"channel_txn_id\":\"WX16-$RUN_ID\",\"expected_amount_cents\":1000}"
+post /api/payment/confirm "$P" -H "x-admin-token: $ADMIN_TOKEN" >/dev/null
+TTL_DIR16=$(mktemp -d)
+cat > "$TTL_DIR16/good.ttl" <<'TTL'
+@prefix soc: <http://soc.example/ontology#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+<urn:agent:smoke> a soc:Person ;
+    soc:status "active" ;
+    soc:displayName "n" ;
+    soc:locatedAt <urn:l:1> ;
+    soc:hasSkill <urn:s:1> ;
+    soc:hasGoal <urn:g:1> ;
+    soc:reputation "0.5"^^xsd:decimal .
+<urn:l:1> a soc:Location .
+<urn:s:1> a soc:Skill .
+<urn:g:1> a soc:Goal .
+TTL
+mkact16() { python3 -c 'import json,os;print(json.dumps({"person_card_rdf":open(os.environ["RDF_FILE"]).read(),"location_id":os.environ["LOC"]}))'; }
+ACT16BAD=$(RDF_FILE="$TTL_DIR16/good.ttl" LOC="nope-loc" mkact16)
+chk "激活带未知地点 = 400" 400 "$(post_code "/api/agent/$AG16/activate" "$ACT16BAD" -H "x-admin-token: $ADMIN_TOKEN")"
+ACT16=$(RDF_FILE="$TTL_DIR16/good.ttl" LOC="$LOC1" mkact16)
+ACTR16=$(post "/api/agent/$AG16/activate" "$ACT16" -H "x-admin-token: $ADMIN_TOKEN")
+chk "带落点激活 = active" active "$(echo "$ACTR16" | get status)"
+chk "激活响应带 location_id" "$LOC1" "$(echo "$ACTR16" | get location_id)"
+ST16=$(curl -s --max-time 10 "$BASE/api/agent/$AG16")
+chk "分身 location_id 已落库" "$LOC1" "$(echo "$ST16" | get location_id)"
+MAPA=$(curl -s --max-time 10 "$BASE/api/map/agents?status=active&bbox=116,39,118,41")
+chk "地图分身 geometry = 落点坐标" "[116.4, 39.9]" "$(echo "$MAPA" | python3 -c "import sys,json;d=json.load(sys.stdin);f=[x for x in d['features'] if x['properties']['agent_id']=='$AG16'];import json as j;print(j.dumps(f[0]['geometry']['coordinates']) if f and f[0]['geometry'] else 'none')" 2>/dev/null || echo none)"
+MAPB=$(curl -s --max-time 10 "$BASE/api/map/agents?status=active&bbox=0,0,10,10")
+chk "bbox 外不含该分身（过滤已下推）" no "$(echo "$MAPB" | python3 -c "import sys,json;d=json.load(sys.stdin);print('yes' if any(x['properties']['agent_id']=='$AG16' for x in d['features']) else 'no')" 2>/dev/null || echo no)"
+# Move：落点更新（params.location_id）；未知地点在落事件前拒绝
+mkmove16() { python3 -c 'import json,os;print(json.dumps({"agent_id":os.environ["AGID"],"action_type":"move","params":{"rdf":open(os.environ["RDF_FILE"]).read(),"location_id":os.environ["LOC"]}}))'; }
+MV16=$(post /api/action "$(AGID="$AG16" LOC="$LOC2" RDF_FILE="$TTL_DIR16/good.ttl" mkmove16)")
+chk "Move 被接受" True "$(echo "$MV16" | get accepted)"
+chk "Move 响应带新 location_id" "$LOC2" "$(echo "$MV16" | get location_id)"
+ST16=$(curl -s --max-time 10 "$BASE/api/agent/$AG16")
+chk "Move 后 location_id 已更新" "$LOC2" "$(echo "$ST16" | get location_id)"
+chk "Move 到未知地点 = 400" 400 "$(post_code /api/action "$(AGID="$AG16" LOC="nope-loc" RDF_FILE="$TTL_DIR16/good.ttl" mkmove16)")"
+# WebSocket：连 /api/ws → 收到 connected → 触发一次 Move → 收到该事件的广播
+cat > "$TTL_DIR16/ws.mjs" <<'EOF'
+import { readFileSync } from "node:fs";
+const base = process.env.BASE_URL, AG = process.env.AGID;
+const rdf = readFileSync(process.env.RDF_FILE, "utf8");
+const ws = new WebSocket(base.replace("http://", "ws://") + "/api/ws");
+const timer = setTimeout(() => { console.log("WS_TIMEOUT"); process.exit(1); }, 9000);
+ws.onmessage = async (ev) => {
+  const msg = JSON.parse(ev.data);
+  if (msg.kind === "connected") {
+    const r = await fetch(base + "/api/action", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ agent_id: AG, action_type: "move", params: { rdf, location_id: process.env.LOC } }) });
+    const j = await r.json();
+    if (!j.accepted) { console.log("WS_MOVE_REJECTED"); clearTimeout(timer); process.exit(1); }
+  }
+  if (msg.kind === "event" && msg.event && msg.event.payload && msg.event.payload.agent_id === AG && msg.event.payload.action_type === "move") {
+    console.log("WS_EVENT_OK"); clearTimeout(timer); process.exit(0);
+  }
+};
+ws.onerror = () => { console.log("WS_ERROR"); clearTimeout(timer); process.exit(1); };
+EOF
+WSOUT=$(BASE_URL="$BASE" AGID="$AG16" RDF_FILE="$TTL_DIR16/good.ttl" LOC="$LOC1" node "$TTL_DIR16/ws.mjs" 2>/dev/null || true)
+chk "WS 订阅收到 Move 事件广播" WS_EVENT_OK "$WSOUT"
+rm -rf "$TTL_DIR16"
+
 echo
 echo "结果：$pass 通过 / $fail 失败"
 [ "$fail" -eq 0 ]

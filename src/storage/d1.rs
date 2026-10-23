@@ -240,6 +240,78 @@ pub async fn account_has_paid_order(db: &D1Database, account_id: &str) -> AppRes
     Ok(row.map(|r| r.ok == 1).unwrap_or(false))
 }
 
+// ---- 地点（G8 位置数据模型，migration 0007）----
+
+/// 地点行：core:Location（基线 soc:Location）的结构化落点。
+/// lon/lat/polygon 是渲染投影（AGENTS.md §8.5），不进本体公理。
+#[derive(Debug, Deserialize)]
+pub struct LocationRow {
+    pub id: String,
+    pub name: String,
+    pub lon: f64,
+    pub lat: f64,
+    /// GeoJSON Polygon 外环 JSON（`[[lon,lat],...]` 闭合环）；无面几何时为 None。
+    pub polygon: Option<String>,
+    pub created_at: String,
+}
+
+/// 创建地点（治理员经 admin 接口调用；id 冲突由 D1 主键约束以错误暴露，
+/// 调用方先 get_location 预检转 409）。
+pub async fn create_location(
+    db: &D1Database,
+    id: &str,
+    name: &str,
+    lon: f64,
+    lat: f64,
+    polygon: Option<&str>,
+) -> AppResult<()> {
+    batch_write(
+        db,
+        vec![db
+            .prepare(
+                "INSERT INTO locations (id, name, lon, lat, polygon, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )
+            .bind(&[
+                s(id),
+                s(name),
+                JsValue::from_f64(lon),
+                JsValue::from_f64(lat),
+                opt_s(polygon),
+                s(&crate::common::types::now_rfc3339()),
+            ])?],
+    )
+    .await?;
+    Ok(())
+}
+
+/// 按 id 查地点。
+pub async fn get_location(db: &D1Database, id: &str) -> AppResult<Option<LocationRow>> {
+    Ok(db
+        .prepare("SELECT id, name, lon, lat, polygon, created_at FROM locations WHERE id = ?1")
+        .bind(&[s(id)])?
+        .first::<LocationRow>(None)
+        .await?)
+}
+
+/// 设置分身位置（agents.location_id = locatedAt 指针）：激活落点与 Move
+/// 动作共用。返回是否更新了 1 行（分身不存在时为 false）。
+pub async fn set_agent_location(db: &D1Database, agent_id: &str, location_id: &str) -> AppResult<bool> {
+    let results = batch_write(
+        db,
+        vec![db
+            .prepare("UPDATE agents SET location_id = ?1 WHERE id = ?2")
+            .bind(&[s(location_id), s(agent_id)])?],
+    )
+    .await?;
+    let changes = results
+        .first()
+        .and_then(|r| r.meta().ok().flatten())
+        .and_then(|m| m.changes)
+        .unwrap_or(0);
+    Ok(changes == 1)
+}
+
 // ---- 事件索引 ----
 
 /// 写事件索引行（完整事件体由调用方写 R2，见 event/log.rs）。

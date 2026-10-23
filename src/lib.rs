@@ -75,6 +75,18 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/api/map/agents", |req, ctx| async move {
             api::into_router_result(api::map::agents_layer(req, ctx).await)
         })
+        .get_async("/api/map/locations", |req, ctx| async move {
+            api::into_router_result(api::map::locations_layer(req, ctx).await)
+        })
+        // WebSocket 世界事件订阅（G8）：转发到 DO 广播 hub（单例），
+        // 升级与 hibernation 语义在 storage::do_state 内处理。
+        .get_async("/api/ws", |req, ctx| async move {
+            let ns = ctx.env.durable_object("DO_STATE")?;
+            let stub = ns
+                .id_from_name(crate::storage::do_state::WORLD_HUB_NAME)?
+                .get_stub()?;
+            stub.fetch_with_request(req).await
+        })
         // 支付：下单（服务端定价）+ 治理员手动确认
         .post_async("/api/payment/order", |req, ctx| async move {
             api::into_router_result(api::payment::create_order(req, ctx).await)
@@ -128,6 +140,10 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         })
         .get_async("/api/admin/replay", |req, ctx| async move {
             api::into_router_result(api::admin::replay_events(req, ctx).await)
+        })
+        // G8 位置数据模型：地点创建（治理通道，系统不预置地点数据）
+        .post_async("/api/admin/locations", |req, ctx| async move {
+            api::into_router_result(api::admin::create_location(req, ctx).await)
         });
 
     router.run(req, env).await

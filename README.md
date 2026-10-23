@@ -256,8 +256,15 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
 - **PersonCard 落库**（G5）：`POST /api/agent` 可选携带 PersonCard，先过 SHACL 才落库
   （`agents.person_card_rdf`，migration 0005）；激活请求未带 card 时优先用已存 card；
   `GET /api/agent/{id}` 与 `/api/me` 带出已存 card。LLM 结构化生成仍为 TODO（等 G12）
+- **位置与地图几何 / WebSocket 广播**（G8）：地点表（migration 0007，治理通道
+  `POST /api/admin/locations` 创建，系统不预置地点数据）；激活可带 `location_id`
+  落点、Move 动作更新 `agents.location_id`（core:locatedAt 指针，未知地点 400）；
+  `GET /api/map/agents` 输出真实 Point 几何并下推 bbox 过滤，`GET /api/map/locations`
+  返回地点几何（Point/Polygon）；`GET /api/ws` 转发到 Durable Object 广播 hub，
+  事件落 append-only 日志后经 hibernation WebSocket 推给在线订阅者（best-effort
+  分发通道，非第二事实源）
 - 错误响应统一 JSON `{"error":"<CODE>","message":"..."}`，5xx 不外泄内部细节
-- 50 个 Rust 源文件、89 个单测、88 项端到端断言
+- 50 个 Rust 源文件、105 个单测、132 项端到端断言
 - L0 中立宪法草案 `l0-constitution/core.ttl`（rdflib 实测：140 三元组、9 原语、零 imports、零人类模板泄漏）
 
 ---
@@ -269,7 +276,8 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
 - LLM 上游未接（`LLM_API_URL` 空时降级规则路径）——「概念化」执行者缺位，交通/货币等新概念**不会自动生成**，只能治理员手动提案
 - L3 本体引擎未接（`ONTOLOGY_ENGINE_URL` 空时 L2 结果即最终结果）
 - oxigraph 未引入（M2 实例层入 RDF 后再评估）
-- Durable Objects WebSocket 广播占位
+- WebSocket 广播 hub 为单 Durable Object 实例且订阅不做鉴权（与地图图层同为
+  公开只读面）；试运行量级足够，连接规模化与订阅鉴权待前端阶段一并设计
 - 注册后**不会自动建订单**，需前端再调 `/api/payment/order`；注册响应里的
   `next: payment_required` 只是提示
 - L0 中立宪法仍是**草案**（`l0-constitution/` 未进构建）；`core.ttl` 尚未替换现有五域
@@ -284,7 +292,7 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
 - [ ] 接入真实 Cloudflare Workers Paid 部署并跑通 D1/Queues 线上语义
 - [ ] LLM 概念化最小闭环：从 agent 行为模式发现未命名模式 → 生成 Turtle 提案 → 过守门流水线
 - [ ] LLM 网关与 L3 本体引擎对接
-- [ ] MapLibre 前端（M2）与 WebSocket 实时广播
+- [ ] MapLibre 前端（M2）；WebSocket 实时广播已落地（G8），待前端消费
 - [ ] oxigraph 实例层评估
 
 ---

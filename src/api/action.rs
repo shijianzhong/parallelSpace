@@ -8,7 +8,7 @@
 use worker::{Response, RouteContext};
 
 use crate::api::json_body;
-use crate::common::error::AppResult;
+use crate::common::error::{AppError, AppResult};
 use crate::governance::validator::{validate_action, ActionRequest};
 use crate::ontology::version::OntologyRouter;
 
@@ -16,6 +16,30 @@ use crate::ontology::version::OntologyRouter;
 ///
 /// 这条降级路径必须由测试钉住：静默丢掉 rdf 会让 L2 形状校验形同虚设，
 /// 所以占位串里显式写明 "no rdf payload"，审计时能一眼看出哪些行动没走校验。
+/// Move 动作的目的地（G8）：优先 `params.location_id`，其次通用
+/// `target_id`。仅 Move 返回目的地；其他动作类型即使带了 location_id
+/// 也不改位置（位置变更的语义只挂在 Move 上）。空串视为未给。
+fn extract_move_destination(action: &ActionRequest) -> Option<String> {
+    if action.action_type != crate::governance::validator::ActionType::Move {
+        return None;
+    }
+    action
+        .params
+        .get("location_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            action
+                .target_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        })
+}
+
 fn extract_rdf_payload(action: &ActionRequest) -> String {
     action
         .params
@@ -56,6 +80,20 @@ pub async fn submit(mut req: worker::Request, ctx: RouteContext<()>) -> AppResul
         return Ok(blocked);
     }
 
+    // G8 Move 落点：给了目的地就必须指向真实存在的地点（不存在 → 400，
+    // 在落事件前拒绝，避免事件流里出现指向虚空的位置变更）。Move 不带
+    // 目的地时只记事件、不改位置（locatedAt 可选，无公理要求每次 Move
+    // 都携带可指称落点）。
+    let move_destination = extract_move_destination(&action);
+    if let Some(dest) = &move_destination {
+        let db = env.d1("DB")?;
+        if crate::storage::d1::get_location(&db, dest).await?.is_none() {
+            return Err(AppError::InvalidInput(format!(
+                "unknown location_id: {dest}"
+            )));
+        }
+    }
+
     // 写事件（append-only）
     let router = OntologyRouter::from_env(&env).await?;
     let event_id = ulid::Ulid::generate().to_string();
@@ -77,6 +115,21 @@ pub async fn submit(mut req: worker::Request, ctx: RouteContext<()>) -> AppResul
     )
     .await?;
 
+    // G8：Move 事件落盘后更新位置指针（事件是事实源，位置是其投影；
+    // 分身不存在时 set 返回 false，只记日志不回滚事件——事件已成立）。
+    let mut applied_location: Option<String> = None;
+    if let Some(dest) = &move_destination {
+        let db = env.d1("DB")?;
+        if crate::storage::d1::set_agent_location(&db, &action.agent_id, dest).await? {
+            applied_location = Some(dest.clone());
+        } else {
+            crate::common::logging::warn(
+                "move_location_not_applied",
+                serde_json::json!({ "agent_id": action.agent_id, "location_id": dest }),
+            );
+        }
+    }
+
     crate::governance::audit::record(
         &env,
         "action.submit",
@@ -92,6 +145,7 @@ pub async fn submit(mut req: worker::Request, ctx: RouteContext<()>) -> AppResul
         "accepted": true,
         "event_id": event_id,
         "inferred_count": result.inferred.len(),
+        "location_id": applied_location,
     }))?)
 }
 
@@ -200,5 +254,39 @@ mod tests {
         // 客户端传 {"rdf": {"nested": true}} 时不该 panic，走同一条降级路径
         let a = action_with_params(serde_json::json!({ "rdf": { "nested": true } }));
         assert!(extract_rdf_payload(&a).contains("no rdf payload"));
+    }
+
+    fn move_action(params: serde_json::Value, target_id: Option<&str>) -> ActionRequest {
+        ActionRequest {
+            agent_id: "urn:agent:1".into(),
+            action_type: crate::governance::validator::ActionType::Move,
+            target_id: target_id.map(str::to_string),
+            params,
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn move_destination_prefers_params_location_id() {
+        let a = move_action(
+            serde_json::json!({ "location_id": "loc-a" }),
+            Some("loc-b"),
+        );
+        assert_eq!(extract_move_destination(&a).as_deref(), Some("loc-a"));
+    }
+
+    #[wasm_bindgen_test]
+    fn move_destination_falls_back_to_target_id() {
+        let a = move_action(serde_json::json!({}), Some(" loc-b "));
+        assert_eq!(extract_move_destination(&a).as_deref(), Some("loc-b"));
+        // 两处都不给 → 无目的地（只记事件、不改位置）
+        let a = move_action(serde_json::json!({ "location_id": "  " }), None);
+        assert_eq!(extract_move_destination(&a), None);
+    }
+
+    #[wasm_bindgen_test]
+    fn non_move_action_has_no_destination() {
+        // Trade 即使带 location_id 也不改位置：位置变更语义只挂 Move
+        let a = action_with_params(serde_json::json!({ "location_id": "loc-a" }));
+        assert_eq!(extract_move_destination(&a), None);
     }
 }
