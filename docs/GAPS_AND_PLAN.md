@@ -20,7 +20,7 @@
 | # | 缺失 | 证据 | 方案要点 |
 | --- | --- | --- | --- |
 | G4 | **四个模块是死代码**：`sandbox::run_sandbox`、`arbitration::file_case`、`event::replay`、`offline_proxy::decide` 均无任何调用方、无路由；AGENTS 模板里承诺的 `analyze_impact` 根本不存在 | 调用图核查（仅 mod.rs re-export） | 逐个接线：sandbox/arbitration/replay 挂 admin 路由；offline_proxy 接入 action 提交路径（离线状态 agent 的不可逆动作 → Defer/Deny）；analyze_impact 新写（提案本体临时装载 + SPARQL 查受影响实例数） |
-| G5 | **PersonCard 链路缺失**：注册的 `narrative` 消毒后直接丢弃；agents 表无 card 字段；LLM 结构化 PersonCard 是 TODO(M2) | `api/auth.rs:6,37-44`；`migrations/0001` agents 表 | migration 0003 加 `person_card_rdf TEXT`；注册可选带 card 并先过 SHACL 才落库；激活接口（本轮新增）优先用已存 card。LLM 结构化等 G12 上游定版后接 |
+| G5 | **PersonCard 链路缺失**：注册的 `narrative` 消毒后直接丢弃；agents 表无 card 字段；LLM 结构化 PersonCard 是 TODO(M2) | `api/auth.rs:6,37-44`；`migrations/0001` agents 表 | migration 0003 加 `person_card_rdf TEXT`；注册可选带 card 并先过 SHACL 才落库；激活接口（本轮新增）优先用已存 card。LLM 结构化等 G12 上游定版后接。**已落地（2026-10-23，见第八节）：编号顺延为 migration 0005（0003/0004 已被 redeem/identities 占用）** |
 | G9 | **沙箱是假的**：`run_sandbox` 只校验绑定名存在，就无条件返回 `passed: true`，不装载提案本体、不跑 tick | `governance/sandbox.rs:34-55` | 提案 Turtle 装入沙箱 R2 → 用 reasonable 跑一致性 + SHACL 全量形状 → 结果如实返回；ticks 参数在真实仿真接入前从结果里移除，不要假报 |
 | G7 | **没有账号认证**：注册只有 email、无口令/会话；`GET /api/agent/:id`、`POST /api/action`、`POST /api/org` 全部无鉴权，任何人可冒充任何 agent_id 提交行动 | `api/auth.rs`、`api/agent.rs`、`api/action.rs` | 会话令牌（注册/登录发 token，KV 存会话）；action/org 校验 token 与 agent 归属；与现有 admin token 体系分开。属安全项，Phase 2 第一位。**登录方案已定版（2026-10-23 用户拍板）**：治理后台走 Cloudflare Access（Google/GitHub + 邮箱白名单，零开发、随 G11 部署配置）；C 端三通道——邮箱验证码首发 + Google/GitHub OAuth；微信登录待开放平台资质排二期。详见文末 G7 细化设计 |
 | G8 | **地图是空壳**：Feature 的 `geometry` 恒为 `null`；bbox 只解析不下推过滤；无 locations 数据（agents.location_id 从未被写过）；前端目录不存在，MapLibre/PMTiles 未开始；DO 的 `/ws` 只 accept 后挂起，且 lib.rs 根本没有把请求转发到 DO 的路由，WebSocket 从外部不可达 | `api/map.rs:80-95`、`storage/do_state.rs:31`、`lib.rs` 路由表 | 先补位置数据模型（migration + 激活时写入 location）；map 输出真实 Point 几何并下推 bbox；lib.rs 加 `/api/ws` 转发到 DO；DO 内用 WebSocket hibernation 广播事件；前端单页（MapLibre CDN）放 Phase 3 |
@@ -115,3 +115,9 @@
 - **已实现**：migration 0004 `user_identities`；邮箱 OTP（Resend 发信 / 未配密钥时日志模式，dev 回显需 `ALLOW_DEV_OTP_ECHO=true` 且仅限本地）；KV 会话（Cookie + Bearer，30 天）；Google/GitHub OAuth 全流程（state 防 CSRF、已验证邮箱、同邮箱关联）；注册拆分（`POST /api/agent` 需会话建分身，旧 register 保留为内部兼容）；`GET /api/me`；自助转让/兑换（`/api/me/transfer`、`/api/me/redeem`，复用 §5.7 账本函数，出账方固定为会话账号）；action 归属校验（过渡模式 + `REQUIRE_AUTH` 开关）。
 - **验收**：smoke 新增第 13 节 11 项，全量 **78 通过 / 0 失败**；单测 89 不变；clippy 0 warning。
 - **遗留**：OAuth 未用真实 client id/secret 端到端验证（需部署时配置）；org 创建接口没有创始人字段，归属校验暂无落点，随 G4 接线时补 founder 绑定；`REQUIRE_AUTH` 默认关，试运行部署清单里必须打开并关闭旧 register 公网路由；Access 侧配置随 G11 部署执行。
+
+## 八、G5 落地记录（2026-10-23）
+
+- **已实现**：migration 0005 给 agents 加 `person_card_rdf TEXT`（文档原写 0003，0003/0004 已被 redeem / identities 占用，顺延）；`POST /api/agent`（需会话）可选携带 `person_card_rdf`，先过 `validate_person_card` SHACL 才落库，违规 → 422 + violations 且不建分身，响应带 `person_card_stored`；不带 card 保持兼容（旧 `/api/auth/register` 不变）。激活接口入参改可选：请求未带（或空白）时用已存 card，两者都无保持原 400 语义；请求带卡仍优先于已存卡。读路径：`GET /api/agent/:id` 与 `GET /api/me` 均带出 `person_card_rdf`。
+- **验收**：smoke 新增第 14 节 10 项（坏卡注册 422 且不建分身、无卡兼容、带卡落库+查询带出、付费推进 pending、空体激活用存量卡 → active、无存量卡不带卡激活 400），全量 **88 通过 / 0 失败**；单测 89 不变；clippy 0 warning。
+- **遗留**：LLM 结构化生成 PersonCard 仍为 TODO(M2)，等 G12 上游定版后接，本次未假接；`narrative` 本身仍只作消毒校验、不落库（落库的是 card），如需叙述留痕另立条目。

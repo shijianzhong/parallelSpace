@@ -40,6 +40,8 @@ pub struct AgentRow {
     pub location_id: Option<String>,
     pub created_at: String,
     pub ontology_version: String,
+    /// 注册时落库的 PersonCard（RDF/Turtle，已过 SHACL）；未携带则为 None（G5）。
+    pub person_card_rdf: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -150,21 +152,24 @@ pub async fn account_exists(db: &D1Database, account_id: &str) -> AppResult<bool
 }
 
 /// 创建分身（初始状态 created；支付首次确认推进 pending，治理员激活后 active）。
+/// `person_card_rdf` 为注册时携带并已过 SHACL 的 PersonCard（G5），无则传 None。
 pub async fn create_agent(
     db: &D1Database,
     id: &str,
     account_id: &str,
     ontology_version: &str,
+    person_card_rdf: Option<&str>,
 ) -> AppResult<()> {
     db.prepare(
-        "INSERT INTO agents (id, account_id, status, location_id, created_at, ontology_version) \
-         VALUES (?1, ?2, 'created', NULL, ?3, ?4)",
+        "INSERT INTO agents (id, account_id, status, location_id, created_at, ontology_version, person_card_rdf) \
+         VALUES (?1, ?2, 'created', NULL, ?3, ?4, ?5)",
     )
     .bind(&[
         s(id),
         s(account_id),
         s(&crate::common::types::now_rfc3339()),
         s(ontology_version),
+        opt_s(person_card_rdf),
     ])?
     .run()
     .await?;
@@ -174,7 +179,7 @@ pub async fn create_agent(
 pub async fn get_agent(db: &D1Database, id: &str) -> AppResult<Option<AgentRow>> {
     Ok(db
         .prepare(
-            "SELECT id, account_id, status, location_id, created_at, ontology_version \
+            "SELECT id, account_id, status, location_id, created_at, ontology_version, person_card_rdf \
              FROM agents WHERE id = ?1",
         )
         .bind(&[s(id)])?
@@ -189,7 +194,7 @@ pub async fn get_agent_by_account(
 ) -> AppResult<Option<AgentRow>> {
     Ok(db
         .prepare(
-            "SELECT id, account_id, status, location_id, created_at, ontology_version \
+            "SELECT id, account_id, status, location_id, created_at, ontology_version, person_card_rdf \
              FROM agents WHERE account_id = ?1 ORDER BY created_at ASC LIMIT 1",
         )
         .bind(&[s(account_id)])?

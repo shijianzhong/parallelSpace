@@ -306,6 +306,74 @@ chk "自助转让后余额 = 50" 50 "$(echo "$TR3" | get fromBalance)"
 ACTX=$(python3 -c "import json;print(json.dumps({'agent_id':'$AG','action_type':'work','params':{'rdf':'<urn:a> <urn:b> <urn:c> .'}}))")
 chk "跨账号会话提交行动 = 403" 403 "$(post_code /api/action "$ACTX" -H "Authorization: Bearer $TOKEN2")"
 
+echo "== 14. PersonCard 落库：注册带卡 → 激活优先用存量卡（G5）"
+# 好/坏卡各一份（与第 11 节同一对：good 的 status 改自 bad 的 flying）
+TTL_DIR5=$(mktemp -d)
+cat > "$TTL_DIR5/bad.ttl" <<'TTL'
+@prefix soc: <http://soc.example/ontology#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+<urn:agent:smoke> a soc:Person ;
+    soc:status "flying" ;
+    soc:displayName "n" ;
+    soc:locatedAt <urn:l:1> ;
+    soc:hasSkill <urn:s:1> ;
+    soc:hasGoal <urn:g:1> ;
+    soc:reputation "0.5"^^xsd:decimal .
+<urn:l:1> a soc:Location .
+<urn:s:1> a soc:Skill .
+<urn:g:1> a soc:Goal .
+TTL
+sed 's/flying/active/' "$TTL_DIR5/bad.ttl" > "$TTL_DIR5/good.ttl"
+# 新账号走 OTP 登录拿会话（dev 回显取码，与第 13 节同路）
+OTPEMAIL5="otp5-$RUN_ID@example.com"
+P="{\"email\":\"$OTPEMAIL5\"}"
+START5=$(post /api/auth/email/start "$P")
+CODE5=$(echo "$START5" | get dev_code)
+P="{\"email\":\"$OTPEMAIL5\",\"code\":\"$CODE5\"}"
+VER5=$(post /api/auth/email/verify "$P")
+TOKEN5=$(echo "$VER5" | get token)
+# 坏卡注册 = 422 且不建分身；随后无卡注册成功（证明 422 没留下分身）
+mkagent() { python3 -c 'import json,os;d={"narrative":"g5 smoke agent"};f=os.environ.get("RDF_FILE");d["person_card_rdf"]=open(f).read() if f else None;d={k:v for k,v in d.items() if v is not None};print(json.dumps(d))'; }
+BADP5=$(RDF_FILE="$TTL_DIR5/bad.ttl" mkagent)
+chk "坏 PersonCard 注册 = 422" 422 "$(post_code /api/agent "$BADP5" -H "Authorization: Bearer $TOKEN5")"
+NOP5=$(mkagent)
+NA5=$(post /api/agent "$NOP5" -H "Authorization: Bearer $TOKEN5")
+chk "坏卡 422 后无卡注册 = created" created "$(echo "$NA5" | get status)"
+chk "无卡注册 person_card_stored = False" False "$(echo "$NA5" | get person_card_stored)"
+# 带好卡注册（另一新账号）：落库 + 查询带出
+OTPEMAIL6="otp6-$RUN_ID@example.com"
+P="{\"email\":\"$OTPEMAIL6\"}"
+START6=$(post /api/auth/email/start "$P")
+CODE6=$(echo "$START6" | get dev_code)
+P="{\"email\":\"$OTPEMAIL6\",\"code\":\"$CODE6\"}"
+VER6=$(post /api/auth/email/verify "$P")
+TOKEN6=$(echo "$VER6" | get token)
+ACC6=$(echo "$VER6" | get account_id)
+GOODP5=$(RDF_FILE="$TTL_DIR5/good.ttl" mkagent)
+NA6=$(post /api/agent "$GOODP5" -H "Authorization: Bearer $TOKEN6")
+AG6=$(echo "$NA6" | get agent_id)
+chk "带卡注册 = created" created "$(echo "$NA6" | get status)"
+chk "带卡注册 person_card_stored = True" True "$(echo "$NA6" | get person_card_stored)"
+ST6=$(curl -s --max-time 10 "$BASE/api/agent/$AG6")
+CARD6=$(echo "$ST6" | python3 -c "import sys,json;print('yes' if 'soc:Person' in (json.load(sys.stdin).get('person_card_rdf') or '') else 'no')" 2>/dev/null || echo no)
+chk "查询带出已存 PersonCard" yes "$CARD6"
+# 付费推进 pending（服务端定价 + admin 确认，流水号本轮唯一）
+P="{\"account_id\":\"$ACC6\",\"package_id\":\"starter\"}"
+ORD6=$(post /api/payment/order "$P")
+OID6=$(echo "$ORD6" | get order_id)
+P="{\"order_id\":\"$OID6\",\"channel_txn_id\":\"WX5-$RUN_ID\",\"expected_amount_cents\":1000}"
+post /api/payment/confirm "$P" -H "x-admin-token: $ADMIN_TOKEN" >/dev/null
+ST6=$(curl -s --max-time 10 "$BASE/api/agent/$AG6")
+chk "付费后状态 = pending" pending "$(echo "$ST6" | get status)"
+# 激活不带 card（空体）→ 用存量卡过 SHACL → active
+chk "空体激活（用存量卡）= 200" 200 "$(post_code "/api/agent/$AG6/activate" '{}' -H "x-admin-token: $ADMIN_TOKEN")"
+ST6=$(curl -s --max-time 10 "$BASE/api/agent/$AG6")
+chk "存量卡激活后状态 = active" active "$(echo "$ST6" | get status)"
+# 无卡分身（NA5 的 AG5）激活不带 card → 保持原报错语义 400
+AG5=$(echo "$NA5" | get agent_id)
+chk "无存量卡且不带卡激活 = 400" 400 "$(post_code "/api/agent/$AG5/activate" '{}' -H "x-admin-token: $ADMIN_TOKEN")"
+rm -rf "$TTL_DIR5"
+
 echo
 echo "结果：$pass 通过 / $fail 失败"
 [ "$fail" -eq 0 ]

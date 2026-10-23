@@ -3,6 +3,8 @@
 //! 激活是注册主线的收尾（此前缺失，见 docs/GAPS_AND_PLAN.md G1）：
 //! 注册 → created；支付首次确认 → pending（payment/credit.rs 推进）；
 //! 治理员带 PersonCard 激活 → active。`created → active` 直跳仍是硬禁。
+//! G5：注册时已落库的 PersonCard（agents.person_card_rdf）可省略请求入参，
+//! 激活优先用请求入参、缺省用已存 card；两者都无保持原报错语义。
 
 use serde::Deserialize;
 use worker::{Response, RouteContext};
@@ -25,6 +27,7 @@ pub async fn get_agent(_req: worker::Request, ctx: RouteContext<()>) -> AppResul
             "status": agent.status,
             "location_id": agent.location_id,
             "ontology_version": agent.ontology_version,
+            "person_card_rdf": agent.person_card_rdf,
         }))?),
         None => Err(AppError::NotFound(format!("agent {agent_id}"))),
     }
@@ -33,7 +36,9 @@ pub async fn get_agent(_req: worker::Request, ctx: RouteContext<()>) -> AppResul
 #[derive(Debug, Deserialize)]
 pub struct ActivateInput {
     /// PersonCard 的 Turtle 负载（soc:Person 实例，过 PersonCardShape 校验）。
-    pub person_card_rdf: String,
+    /// 可省略：省略（或空白）时用注册落库的已存 card（G5）；都无则报错。
+    #[serde(default)]
+    pub person_card_rdf: Option<String>,
 }
 
 /// 激活分身：pending → active（治理员执行）。
@@ -50,9 +55,6 @@ pub async fn activate(mut req: worker::Request, ctx: RouteContext<()>) -> AppRes
     crate::api::admin::check_admin(&req, &ctx).map_err(|_| AppError::Unauthorized)?;
     let agent_id = require_param(&ctx, "id")?;
     let input: ActivateInput = json_body(&mut req).await?;
-    if input.person_card_rdf.trim().is_empty() {
-        return Err(AppError::InvalidInput("person_card_rdf required".into()));
-    }
 
     let env = ctx.env.clone();
     let db = env.d1("DB")?;
@@ -60,6 +62,22 @@ pub async fn activate(mut req: worker::Request, ctx: RouteContext<()>) -> AppRes
     let agent = d1::get_agent(&db, &agent_id)
         .await?
         .ok_or_else(|| AppError::NotFound(format!("agent {agent_id}")))?;
+    // PersonCard 来源（G5）：请求入参优先，缺省用注册落库的已存 card；
+    // 两者都无保持原报错语义（400 person_card_rdf required）。
+    let person_card_rdf = input
+        .person_card_rdf
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .or_else(|| {
+            agent
+                .person_card_rdf
+                .as_deref()
+                .map(str::trim)
+                .filter(|c| !c.is_empty())
+        })
+        .ok_or_else(|| AppError::InvalidInput("person_card_rdf required".into()))?
+        .to_string();
     let from = AgentStatus::parse(&agent.status)
         .ok_or_else(|| AppError::Internal(format!("unknown agent status {}", agent.status)))?;
     // 状态门：激活只接受 pending 的分身，其余状态统一 409 并报出当前状态。
@@ -106,7 +124,7 @@ pub async fn activate(mut req: worker::Request, ctx: RouteContext<()>) -> AppRes
         )));
     }
 
-    let validation = crate::ontology::shacl::validate_person_card(&input.person_card_rdf)?;
+    let validation = crate::ontology::shacl::validate_person_card(&person_card_rdf)?;
     if !validation.ok {
         let resp = Response::from_json(&serde_json::json!({
             "activated": false,

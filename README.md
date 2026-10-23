@@ -253,8 +253,11 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
 - 注册 / 查询 / 激活 / 行动 / 组织 / 地图 / 下单 / 支付确认 / 本体域注册 / 提案 / 审批 / 回滚 API
 - 积分转让 / agent 收益入账 / 兑换申请与审批（2026-10-23 定调：积分可转让、可兑换，admin 代办，规则见 AGENTS §5.7）
 - 用户认证（G7）：邮箱验证码 + Google/GitHub OAuth + KV 会话、登录后建分身、/api/me、自助转让/兑换、行动归属校验（AGENTS §5.8）
+- **PersonCard 落库**（G5）：`POST /api/agent` 可选携带 PersonCard，先过 SHACL 才落库
+  （`agents.person_card_rdf`，migration 0005）；激活请求未带 card 时优先用已存 card；
+  `GET /api/agent/{id}` 与 `/api/me` 带出已存 card。LLM 结构化生成仍为 TODO（等 G12）
 - 错误响应统一 JSON `{"error":"<CODE>","message":"..."}`，5xx 不外泄内部细节
-- 50 个 Rust 源文件、89 个单测、78 项端到端断言
+- 50 个 Rust 源文件、89 个单测、88 项端到端断言
 - L0 中立宪法草案 `l0-constitution/core.ttl`（rdflib 实测：140 三元组、9 原语、零 imports、零人类模板泄漏）
 
 ---

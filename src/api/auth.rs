@@ -4,6 +4,8 @@
 //! SHACL 校验 → 支付 → confirm_payment → pending → 治理员激活 → active。
 //! 本模块负责第一步：账号/分身落库（created 状态）、输入消毒、审计。
 //! 支付推进 pending 在 payment/credit.rs，激活在 api/agent.rs::activate。
+//! G5：`POST /api/agent` 可选携带 PersonCard，先过 SHACL 才随分身落库
+//! （agents.person_card_rdf，migration 0005）；激活时优先用已存 card。
 //! TODO(M2)：LLM 结构化 PersonCard（llm/gateway.rs 就绪后接入）。
 //!
 //! 硬规则：未支付不得激活成分身（lifecycle 状态门 + 激活接口的 paid 订单校验）。
@@ -52,7 +54,7 @@ pub async fn register(mut req: worker::Request, ctx: RouteContext<()>) -> AppRes
     // 分身：一账号一个分身（MVP），状态 created（未支付）
     let router = OntologyRouter::from_env(&env).await?;
     let agent_id = ulid::Ulid::generate().to_string();
-    d1::create_agent(&db, &agent_id, &account_id, router.for_action().as_str()).await?;
+    d1::create_agent(&db, &agent_id, &account_id, router.for_action().as_str(), None).await?;
 
     crate::governance::audit::record(
         &env,
@@ -183,10 +185,15 @@ pub async fn email_verify(mut req: worker::Request, ctx: RouteContext<()>) -> Ap
 #[derive(Debug, Deserialize)]
 pub struct CreateAgentInput {
     pub narrative: String,
+    /// 可选 PersonCard（RDF/Turtle）：携带时先过 SHACL，通过才随分身落库（G5）；
+    /// 不带保持兼容（激活时再由请求传入，或届时仍无卡则按激活接口语义报错）。
+    #[serde(default)]
+    pub person_card_rdf: Option<String>,
 }
 
 /// 登录后创建分身（出生态）：POST /api/agent（需会话）。
 /// 一账号一分身（MVP）；已有分身返回 409。
+/// 携带 PersonCard 时先过 SHACL：违规 → 422 + violations 明细，且不建分身。
 pub async fn create_agent(mut req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
     let env = ctx.env.clone();
     let account_id = session::require_session(&req, &env).await?;
@@ -195,13 +202,36 @@ pub async fn create_agent(mut req: worker::Request, ctx: RouteContext<()>) -> Ap
     if narrative.is_empty() {
         return Err(AppError::InvalidInput("narrative required".into()));
     }
+    // PersonCard 落库门（G5）：空白视为未携带；携带则必须过 SHACL 才落库。
+    let person_card_rdf = input
+        .person_card_rdf
+        .as_deref()
+        .map(str::trim)
+        .filter(|c| !c.is_empty());
+    if let Some(card) = person_card_rdf {
+        let validation = crate::ontology::shacl::validate_person_card(card)?;
+        if !validation.ok {
+            let resp = Response::from_json(&serde_json::json!({
+                "created": false,
+                "violations": validation.violations,
+            }))?;
+            return Ok(resp.with_status(422));
+        }
+    }
     let db = env.d1("DB")?;
     if d1::get_agent_by_account(&db, &account_id).await?.is_some() {
         return Err(AppError::Conflict("account already has an agent".into()));
     }
     let router = OntologyRouter::from_env(&env).await?;
     let agent_id = ulid::Ulid::generate().to_string();
-    d1::create_agent(&db, &agent_id, &account_id, router.for_action().as_str()).await?;
+    d1::create_agent(
+        &db,
+        &agent_id,
+        &account_id,
+        router.for_action().as_str(),
+        person_card_rdf,
+    )
+    .await?;
     crate::governance::audit::record(
         &env,
         "auth.agent_created",
@@ -212,6 +242,7 @@ pub async fn create_agent(mut req: worker::Request, ctx: RouteContext<()>) -> Ap
         "account_id": account_id,
         "agent_id": agent_id,
         "status": "created",
+        "person_card_stored": person_card_rdf.is_some(),
         "next": "payment_required",
     }))?)
 }
@@ -237,6 +268,7 @@ pub async fn me(req: worker::Request, ctx: RouteContext<()>) -> AppResult<Respon
             serde_json::json!({
                 "id": a.id,
                 "status": a.status,
+                "person_card_rdf": a.person_card_rdf,
                 "hot_state": hot.map(|h| serde_json::json!({
                     "money": h.money, "food": h.food, "energy": h.energy, "reputation": h.reputation
                 })),
