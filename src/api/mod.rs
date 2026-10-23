@@ -9,6 +9,7 @@ pub mod org;
 pub mod oauth;
 pub mod payment;
 pub mod session;
+pub mod web;
 
 use worker::{Request, Response, RouteContext};
 

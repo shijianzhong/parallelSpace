@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ParallelSpace · 平行空间</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">ParallelSpace <span class="brand-sub">平行空间 · 试运行</span></div>
+  <nav id="tabs" hidden>
+    <a href="/" data-nav="home">我的分身</a>
+    <a href="/create" data-nav="create">创建分身</a>
+    <a href="/timeline" data-nav="timeline">生活时间线</a>
+    <a href="/funds" data-nav="funds">资金</a>
+    <a href="/map" data-nav="map">地图</a>
+  </nav>
+  <div id="whoami" hidden>
+    <span id="whoami-email"></span>
+    <button id="logout-btn" type="button">退出登录</button>
+  </div>
+</header>
+
+<main id="app">
+  <p id="boot-msg" class="muted">加载中…</p>
+
+  <!-- 登录 -->
+  <section data-view="login" hidden>
+    <h1>登录</h1>
+    <p class="muted">用邮箱验证码登录；也可以用 Google / GitHub 账号。</p>
+    <form id="otp-start-form">
+      <label>邮箱
+        <input id="otp-email" type="email" required autocomplete="email" placeholder="you@example.com">
+      </label>
+      <button type="submit">发送验证码</button>
+      <span id="otp-start-msg" class="msg"></span>
+    </form>
+    <form id="otp-verify-form">
+      <label>验证码（6 位，10 分钟内有效）
+        <input id="otp-code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="123456">
+      </label>
+      <button type="submit">验证并登录</button>
+      <span id="otp-verify-msg" class="msg"></span>
+    </form>
+    <div class="oauth-row">
+      <a class="btn" href="/api/auth/oauth/google/start">用 Google 登录</a>
+      <a class="btn" href="/api/auth/oauth/github/start">用 GitHub 登录</a>
+    </div>
+    <p class="muted small">OAuth 需要服务端已配置对应应用密钥；未配置时请用邮箱验证码。</p>
+  </section>
+
+  <!-- 首页：分身卡 -->
+  <section data-view="home" hidden>
+    <h1>我的分身</h1>
+    <div id="home-body"></div>
+  </section>
+
+  <!-- 创建分身 -->
+  <section data-view="create" hidden>
+    <h1>创建分身</h1>
+    <div id="create-body">
+      <p class="muted">一账号一个分身。出身叙述是分身的起点；PersonCard（RDF/Turtle）可现在填写并落库，也可留空、日后激活时再补。</p>
+      <form id="create-form">
+        <label>出身叙述（必填）
+          <textarea id="create-narrative" rows="4" required placeholder="例如：在港口长大的修船匠，想看看海那边的世界。"></textarea>
+        </label>
+        <label>PersonCard RDF（可选，填写则先过 SHACL 校验才落库）
+          <textarea id="create-card" rows="10" class="mono" placeholder="Turtle 格式，需包含 soc:Person 实例（displayName / status / locatedAt / hasSkill / hasGoal）。"></textarea>
+        </label>
+        <div class="row">
+          <button type="button" id="card-example-btn">填入示例卡</button>
+          <button type="submit">创建分身</button>
+        </div>
+        <div id="create-msg" class="msg"></div>
+        <ul id="create-violations" class="violations"></ul>
+      </form>
+    </div>
+  </section>
+
+  <!-- 生活时间线 -->
+  <section data-view="timeline" hidden>
+    <h1>生活时间线</h1>
+    <p class="muted">这里是分身的事件流（事实记录）。被离线代理闸门拦下的行动也会出现在这里，并注明原因；它们没有被执行。</p>
+    <button id="timeline-refresh" type="button">刷新</button>
+    <div id="timeline-body"></div>
+  </section>
+
+  <!-- 资金 -->
+  <section data-view="funds" hidden>
+    <h1>资金</h1>
+    <div id="funds-body"></div>
+    <h2>积分流水</h2>
+    <div id="txn-body"></div>
+    <h2>积分转让</h2>
+    <form id="transfer-form">
+      <label>对方账号 ID
+        <input id="transfer-to" type="text" required placeholder="对方的 account_id">
+      </label>
+      <label>数量
+        <input id="transfer-amount" type="number" min="1" step="1" required>
+      </label>
+      <button type="submit">转让</button>
+      <span id="transfer-msg" class="msg"></span>
+    </form>
+    <h2>积分兑换</h2>
+    <p class="muted small">兑换申请会先冻结对应积分，之后由治理员审批并人工打款；被驳回时冻结自动释放。</p>
+    <form id="redeem-form">
+      <label>兑换数量
+        <input id="redeem-credits" type="number" min="1" step="1" required>
+      </label>
+      <button type="submit">提交兑换申请</button>
+      <span id="redeem-msg" class="msg"></span>
+    </form>
+  </section>
+
+  <!-- 地图 -->
+  <section data-view="map" hidden>
+    <h1>地图</h1>
+    <p class="muted">地点由治理通道创建，系统不预置地点数据；没有地点时这里就是空的。</p>
+    <p id="ws-status" class="muted small">实时事件：未连接</p>
+    <div id="map-body"></div>
+    <div id="map-feed" class="feed"></div>
+  </section>
+</main>
+
+<footer class="muted small">ParallelSpace 试运行 MVP · 页面数据全部来自本服务 API</footer>
+<script src="/app.js"></script>
+</body>
+</html>

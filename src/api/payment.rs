@@ -304,6 +304,45 @@ pub async fn redeem_reject(req: worker::Request, ctx: RouteContext<()>) -> AppRe
 
 // ---------- 用户自助资金操作（需会话，G7 后开放；复用 §5.7 账本函数） ----------
 
+/// 我的积分流水：GET /api/me/transactions?limit=50（需会话，只读）。
+/// 余额与 /api/me 同源（credit_accounts），流水来自 append-only 的
+/// credit_transactions（§5.7 三条资金路径的 type 都在其中）。
+pub async fn me_transactions(req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    let env = ctx.env.clone();
+    let account_id = crate::api::session::require_session(&req, &env).await?;
+    let limit: u32 = req
+        .url()?
+        .query_pairs()
+        .find(|(k, _)| k == "limit")
+        .and_then(|(_, v)| v.parse().ok())
+        .unwrap_or(50)
+        .clamp(1, 200);
+    let db = env.d1("DB")?;
+    let balance = crate::storage::d1::get_credit_account(&db, &account_id)
+        .await?
+        .map(|a| a.balance)
+        .unwrap_or(0);
+    let rows = crate::storage::d1::list_credit_transactions(&db, &account_id, limit).await?;
+    let transactions: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|t| {
+            serde_json::json!({
+                "id": t.id,
+                "delta": t.delta,
+                "type": t.txn_type,
+                "order_id": t.order_id,
+                "event_id": t.event_id,
+                "created_at": t.created_at,
+            })
+        })
+        .collect();
+    json_ok(serde_json::json!({
+        "account_id": account_id,
+        "balance": balance,
+        "transactions": transactions,
+    }))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct MeTransferInput {
     pub to_account_id: String,

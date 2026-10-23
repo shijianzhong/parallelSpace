@@ -52,6 +52,28 @@ pub struct AccountRow {
     pub risk_score: f64,
 }
 
+/// 积分流水行（credit_transactions；type 列别名 txn_type 以避开 Rust 关键字）。
+#[derive(Debug, Deserialize)]
+pub struct CreditTransactionRow {
+    pub id: String,
+    pub delta: i64,
+    pub txn_type: String,
+    pub order_id: Option<String>,
+    pub event_id: Option<String>,
+    pub created_at: String,
+}
+
+/// 事件索引行（events_index；事件体在 R2，索引只做检索）。
+#[derive(Debug, Deserialize)]
+pub struct EventIndexRow {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub tick: i64,
+    pub ontology_version: String,
+    pub created_at: String,
+}
+
 // ---- 绑定辅助 ----
 
 fn s(v: &str) -> JsValue {
@@ -1000,4 +1022,44 @@ pub async fn swap_active_version(db: &D1Database, from_version: &str, to_version
     )
     .await?;
     Ok(())
+}
+
+// ---- 前端只读视图（试运行 MVP：资金流水 / 生活时间线数据源） ----
+
+/// 某账号最近的积分流水（倒序，上限由调用方夹紧）。
+pub async fn list_credit_transactions(
+    db: &D1Database,
+    account_id: &str,
+    limit: u32,
+) -> AppResult<Vec<CreditTransactionRow>> {
+    let rows: Vec<CreditTransactionRow> = db
+        .prepare(
+            "SELECT id, delta, type AS txn_type, order_id, event_id, created_at \
+             FROM credit_transactions WHERE account_id = ?1 \
+             ORDER BY created_at DESC, id DESC LIMIT ?2",
+        )
+        .bind(&[s(account_id), n(limit as i64)])?
+        .all()
+        .await?
+        .results()?;
+    Ok(rows)
+}
+
+/// 某分身（actor）最近的事件索引（倒序；事件体由调用方按 tick/id 回 R2 取）。
+pub async fn list_events_by_actor(
+    db: &D1Database,
+    actor_id: &str,
+    limit: u32,
+) -> AppResult<Vec<EventIndexRow>> {
+    let rows: Vec<EventIndexRow> = db
+        .prepare(
+            "SELECT id, type, tick, ontology_version, created_at \
+             FROM events_index WHERE actor_id = ?1 \
+             ORDER BY tick DESC, created_at DESC, id DESC LIMIT ?2",
+        )
+        .bind(&[s(actor_id), n(limit as i64)])?
+        .all()
+        .await?
+        .results()?;
+    Ok(rows)
 }

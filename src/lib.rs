@@ -29,6 +29,35 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/health", |_, _| async move {
             Response::ok(concat!("parallelspace/", env!("CARGO_PKG_VERSION")))
         })
+        // 前端入口（试运行 MVP）：内嵌静态单页应用（api::web）。
+        // 页面壳公开，数据一律走下方 /api/* 的会话校验。
+        .get_async("/", |req, ctx| async move {
+            api::into_router_result(api::web::index(req, ctx).await)
+        })
+        .get_async("/login", |req, ctx| async move {
+            api::into_router_result(api::web::index(req, ctx).await)
+        })
+        .get_async("/create", |req, ctx| async move {
+            api::into_router_result(api::web::index(req, ctx).await)
+        })
+        .get_async("/home", |req, ctx| async move {
+            api::into_router_result(api::web::index(req, ctx).await)
+        })
+        .get_async("/timeline", |req, ctx| async move {
+            api::into_router_result(api::web::index(req, ctx).await)
+        })
+        .get_async("/funds", |req, ctx| async move {
+            api::into_router_result(api::web::index(req, ctx).await)
+        })
+        .get_async("/map", |req, ctx| async move {
+            api::into_router_result(api::web::index(req, ctx).await)
+        })
+        .get_async("/app.css", |req, ctx| async move {
+            api::into_router_result(api::web::css(req, ctx).await)
+        })
+        .get_async("/app.js", |req, ctx| async move {
+            api::into_router_result(api::web::js(req, ctx).await)
+        })
         // 账号与分身
         .post_async("/api/auth/register", |req, ctx| async move {
             api::into_router_result(api::auth::register(req, ctx).await)
@@ -48,8 +77,17 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/api/agent", |req, ctx| async move {
             api::into_router_result(api::auth::create_agent(req, ctx).await)
         })
+        .post_async("/api/auth/logout", |req, ctx| async move {
+            api::into_router_result(api::auth::logout(req, ctx).await)
+        })
         .get_async("/api/me", |req, ctx| async move {
             api::into_router_result(api::auth::me(req, ctx).await)
+        })
+        .get_async("/api/me/timeline", |req, ctx| async move {
+            api::into_router_result(api::auth::me_timeline(req, ctx).await)
+        })
+        .get_async("/api/me/transactions", |req, ctx| async move {
+            api::into_router_result(api::payment::me_transactions(req, ctx).await)
         })
         .post_async("/api/me/transfer", |req, ctx| async move {
             api::into_router_result(api::payment::me_transfer(req, ctx).await)

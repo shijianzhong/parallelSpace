@@ -76,7 +76,7 @@
 | 校验 | 内嵌 SHACL 引擎（受限约束集），封装在 ontology/shacl.rs；形状在 ontology/shacl/ |
 | 存储 | D1（批量写）、KV（热状态）、R2（日志 / 归档 / 本体版本）、DO（WebSocket，目前仅占位）、沙箱用独立 DB_SANDBOX / KV_SANDBOX / R2_SANDBOX 绑定 |
 | 事件 | Queues 生产 / 消费，append-only 日志到 R2 |
-| 地图 | 前端 MapLibre GL JS（**M2 规划，尚未实现**）；后端只提供 GeoJSON |
+| 地图 | 后端只提供 GeoJSON；前端入口已落地（零构建原生 SPA，SVG 渲染，见 `web/`），MapLibre GL JS 仍为 **M2 规划** |
 | 支付 | PaymentProvider trait，短期 ManualWechatProvider；套餐定价在 payment/packages.rs（服务端定价） |
 | 测试 | cargo test + wasm-bindgen-test（node 驱动，无需浏览器）；端到端以 scripts/smoke.sh 为准 |
 | 构建门禁 | `cargo check` / `clippy` / `test`（均带 `--target wasm32-unknown-unknown`）是唯一权威门禁，不要指望 tsc 类工具抓 wasm 问题 |
@@ -96,11 +96,12 @@ migrations/
 ├── 0001_init.sql          # 15 表
 └── 0002_ontology_domains.sql  # 域注册表 + versions 状态列 + 五域种子
 scripts/
-├── smoke.sh               # 端到端冒烟（50 项断言）
+├── smoke.sh               # 端到端冒烟（断言数见 README 验证矩阵）
 └── wasm-bindgen-reftypes.sh
+web/                       # 前端入口静态文件（index.html / app.css / app.js，编译期 include_str! 内嵌，src/api/web.rs 托管）
 src/
 ├── lib.rs                 # fetch 入口 + 路由
-├── api/{auth,agent,action,org,map,payment,admin}.rs
+├── api/{auth,oauth,session,agent,action,org,map,payment,admin,web}.rs  # web.rs = 前端入口静态托管
 ├── ontology/{iri,version,sparql,shacl,reason}.rs
 ├── agent_runtime/{scheduler,lifecycle,decision,offline_proxy}.rs
 ├── llm/{gateway,router,cache}.rs
@@ -546,7 +547,7 @@ agent 行为模式 ──LLM 概念化──> ChangeProposal(targetLayer = L1 | 
 ### 10. 已知边界（生成代码时不得掩盖，须在注释 / 文档中如实标注）
 
 - LLM 上游未接：概念化执行者缺位，新概念不会自动生成，只能治理员手动提案。
-- L3 本体引擎未接、oxigraph 未引入。Durable Objects WebSocket 已接通（G8）：事件落盘后经单例 hub 广播，hub 无订阅鉴权、前端 MapLibre 未做。
+- L3 本体引擎未接、oxigraph 未引入。Durable Objects WebSocket 已接通（G8）：事件落盘后经单例 hub 广播，hub 无订阅鉴权。前端入口已落地（试运行 MVP：内嵌静态 SPA，分身卡优先、世界层需登录，地图为 SVG 非 MapLibre），见 docs/GAPS_AND_PLAN.md 第十二节。
 - `core.ttl` 仍是草案未进构建；五域仍是实现基线（L2 seed 定位）。
 - 审批由 admin token 持有者执行，无独立治理身份。
 - 仅在 miniflare 本地态验证，未在真实 Cloudflare Paid 账号部署；D1 事务与 Queues 线上语义以真实环境为准。

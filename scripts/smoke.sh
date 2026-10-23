@@ -545,6 +545,27 @@ WSOUT=$(BASE_URL="$BASE" AGID="$AG16" RDF_FILE="$TTL_DIR16/good.ttl" LOC="$LOC1"
 chk "WS 订阅收到 Move 事件广播" WS_EVENT_OK "$WSOUT"
 rm -rf "$TTL_DIR16"
 
+echo "== 17. 前端入口：静态页 / 自助流水 / 生活时间线（试运行 MVP）"
+chk "GET / = 200" 200 "$(getcode "$BASE/")"
+HOMEBODY=$(curl -s --max-time 10 "$BASE/")
+chk "首页是应用壳（含 ParallelSpace 标记）" yes "$(echo "$HOMEBODY" | python3 -c "import sys;print('yes' if 'ParallelSpace' in sys.stdin.read() else 'no')" 2>/dev/null || echo no)"
+chk "GET /login = 200" 200 "$(getcode "$BASE/login")"
+chk "GET /map = 200（壳公开、数据靠会话）" 200 "$(getcode "$BASE/map")"
+chk "GET /app.js = 200" 200 "$(getcode "$BASE/app.js")"
+chk "GET /app.css = 200" 200 "$(getcode "$BASE/app.css")"
+chk "无会话流水 = 401" 401 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE/api/me/transactions")"
+chk "无会话时间线 = 401" 401 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE/api/me/timeline")"
+# 复用第 13 节会话（ACC3/AG3：第 13 节有收益/兑换/转让三笔；第 15 节有离线代理审计与已落事件）
+TXN17=$(curl -s --max-time 10 "$BASE/api/me/transactions?limit=100" -H "Authorization: Bearer $TOKEN2")
+chk "流水余额 = 50（120 收益 -40 兑换 -30 转让）" 50 "$(echo "$TXN17" | get balance)"
+chk "流水含 agent_earnings / redeem_hold / transfer_out" yes "$(echo "$TXN17" | python3 -c "import sys,json;ts={t['type'] for t in json.load(sys.stdin)['transactions']};print('yes' if {'agent_earnings','redeem_hold','transfer_out'} <= ts else 'no')" 2>/dev/null || echo no)"
+TL17=$(curl -s --max-time 20 "$BASE/api/me/timeline?limit=100" -H "Authorization: Bearer $TOKEN2")
+chk "时间线含离线代理 Defer 审计" yes "$(echo "$TL17" | python3 -c "import sys,json;print('yes' if any(i.get('kind')=='audit' and i.get('action')=='action.proxy_deferred' for i in json.load(sys.stdin)['items']) else 'no')" 2>/dev/null || echo no)"
+chk "时间线含已落事件（第 15 节 work/trade）" yes "$(echo "$TL17" | python3 -c "import sys,json;print('yes' if any(i.get('kind')=='event' for i in json.load(sys.stdin)['items']) else 'no')" 2>/dev/null || echo no)"
+# 退出登录：删会话后同一 token 失效（TOKEN2 至此使命完成，放最后）
+chk "退出登录 = 200" 200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$BASE/api/auth/logout" -H "Authorization: Bearer $TOKEN2")"
+chk "退出后 /api/me = 401" 401 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE/api/me" -H "Authorization: Bearer $TOKEN2")"
+
 echo
 echo "结果：$pass 通过 / $fail 失败"
 [ "$fail" -eq 0 ]

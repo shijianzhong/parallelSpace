@@ -247,6 +247,126 @@ pub async fn create_agent(mut req: worker::Request, ctx: RouteContext<()>) -> Ap
     }))?)
 }
 
+/// 退出登录：POST /api/auth/logout（删 KV 会话 + 过期 Cookie；无会话也幂等成功）。
+pub async fn logout(req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    let env = ctx.env.clone();
+    let expired = session::destroy_session(&req, &env).await?;
+    let mut resp = Response::from_json(&serde_json::json!({ "logged_out": true }))?;
+    resp.headers_mut().set("set-cookie", &expired)?;
+    Ok(resp)
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TimelineEventFull {
+    payload: serde_json::Value,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct AuditRecord {
+    id: String,
+    action: String,
+    at: String,
+    fields: serde_json::Value,
+}
+
+/// 我的分身生活时间线：GET /api/me/timeline?limit=50（需会话）。
+///
+/// 数据源全部为既有事实记录，不造数：
+/// - 事件：events_index 里 actor = 本人分身的行（倒序），事件体按
+///   events/{tick}/{id}.json 回 R2 取 payload；取不到时 payload 为 null。
+/// - 离线代理审计（G4）：proxy_gate 拦下的动作只写审计（R2 audit/{date}/，
+///   不落事件），故按日期前缀回扫近 14 天、命中本分身的
+///   action.proxy_deferred / action.proxy_denied 并入时间线；扫描对象数
+///   有上限（500），超限即停（试运行量级足够，注释如实标注）。
+pub async fn me_timeline(req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    let env = ctx.env.clone();
+    let account_id = session::require_session(&req, &env).await?;
+    let limit: u32 = req
+        .url()?
+        .query_pairs()
+        .find(|(k, _)| k == "limit")
+        .and_then(|(_, v)| v.parse().ok())
+        .unwrap_or(50)
+        .clamp(1, 100);
+    let db = env.d1("DB")?;
+    let Some(agent) = d1::get_agent_by_account(&db, &account_id).await? else {
+        return Ok(Response::from_json(
+            &serde_json::json!({ "agent_id": null, "items": [] }),
+        )?);
+    };
+    let bucket = env.bucket("R2")?;
+    let rows = d1::list_events_by_actor(&db, &agent.id, limit).await?;
+    let mut items: Vec<serde_json::Value> = Vec::new();
+    for row in &rows {
+        let full = crate::storage::r2::get_json::<TimelineEventFull>(
+            &bucket,
+            &crate::storage::r2::event_key(row.tick as u64, &row.id),
+        )
+        .await
+        .ok()
+        .flatten();
+        items.push(serde_json::json!({
+            "kind": "event",
+            "id": row.id,
+            "type": row.event_type,
+            "tick": row.tick,
+            "at": row.created_at,
+            "ontology_version": row.ontology_version,
+            "payload": full.map(|f| f.payload),
+        }));
+    }
+    const AUDIT_SCAN_DAYS: i64 = 14;
+    const AUDIT_SCAN_CAP: usize = 500;
+    let mut scanned = 0usize;
+    'days: for back in 0..AUDIT_SCAN_DAYS {
+        let date = (chrono::Utc::now() - chrono::Duration::days(back))
+            .format("%Y-%m-%d")
+            .to_string();
+        let listed = bucket
+            .list()
+            .prefix(format!("audit/{date}/"))
+            .execute()
+            .await?;
+        for obj in listed.objects() {
+            if scanned >= AUDIT_SCAN_CAP {
+                break 'days;
+            }
+            scanned += 1;
+            let key = obj.key();
+            let rec = crate::storage::r2::get_json::<AuditRecord>(&bucket, &key)
+                .await
+                .ok()
+                .flatten();
+            if let Some(rec) = rec {
+                let hit = matches!(
+                    rec.action.as_str(),
+                    "action.proxy_deferred" | "action.proxy_denied"
+                ) && rec.fields.get("agent_id").and_then(|v| v.as_str())
+                    == Some(agent.id.as_str());
+                if hit {
+                    items.push(serde_json::json!({
+                        "kind": "audit",
+                        "id": rec.id,
+                        "action": rec.action,
+                        "at": rec.at,
+                        "fields": rec.fields,
+                    }));
+                }
+            }
+        }
+    }
+    items.sort_by(|a, b| {
+        b["at"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(a["at"].as_str().unwrap_or(""))
+    });
+    items.truncate(limit as usize);
+    Ok(Response::from_json(
+        &serde_json::json!({ "agent_id": agent.id, "items": items }),
+    )?)
+}
+
 /// 当前账号总览：GET /api/me（需会话）。首页分身卡的数据源。
 pub async fn me(req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
     let env = ctx.env.clone();

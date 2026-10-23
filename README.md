@@ -101,6 +101,7 @@ parallelspace/
 ├── l0-constitution/       # L0 中立宪法草案（core.ttl + DESIGN.md，未进构建）
 ├── migrations/            # D1 SQL：0001_init（15 表）/ 0002_ontology_domains
 ├── scripts/               # smoke.sh（端到端）/ wasm-bindgen-reftypes.sh
+├── web/                   # 前端入口静态文件（index.html / app.css / app.js，内嵌托管）
 └── src/
     ├── lib.rs             # fetch 入口 + 路由
     ├── api/               # HTTP handlers（薄层）
@@ -157,14 +158,15 @@ npx wrangler d1 migrations apply parallelspace-sandbox-db   --local
 npx wrangler dev --local --port 8787
 ```
 
-### 5. 端到端冒烟（另开终端，57 项断言）
+### 5. 端到端冒烟（另开终端，146 项断言）
 
 ```bash
 bash scripts/smoke.sh
 ```
 
-冒烟分 10 节：注册 → 下单 → 支付入账（幂等）→ SHACL → 查询 → 地图 →
-**本体治理（域注册表 + pending → approve 两段式发布 + 回滚状态机）**。
+冒烟分 18 节：注册 → 下单 → 支付入账（幂等）→ SHACL → 查询 → 地图 →
+**本体治理（域注册表 + pending → approve 两段式发布 + 回滚状态机）** →
+认证 / PersonCard 落库 / G4 接线 / 位置与 WS 广播 / 前端入口。
 脚本可重复运行（治理段用运行期唯一域名/版本号，不依赖干净库）。
 
 ---
@@ -263,8 +265,18 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
   返回地点几何（Point/Polygon）；`GET /api/ws` 转发到 Durable Object 广播 hub，
   事件落 append-only 日志后经 hibernation WebSocket 推给在线订阅者（best-effort
   分发通道，非第二事实源）
+- **前端入口**（试运行 MVP）：零构建原生 HTML/CSS/JS 单页应用（`web/` 三文件，
+  编译期内嵌、Worker 路由直出，不依赖 wrangler assets 绑定）。登录页（邮箱 OTP +
+  Google/GitHub OAuth 按钮）、分身卡优先的首页（状态 / PersonCard 是否已存 /
+  位置 / 积分 / 热状态；pending 带激活入口，默认用已存卡）、创建分身表单
+  （422 时 violations 明细回显）、生活时间线、自助资金页、SVG 地图页（消费
+  `/api/map` 几何 + `/api/ws` 实时广播刷新）。两个策划默认项：**分身卡优先**
+  （地图为二级页签）、**世界层不对访客开放**（页面壳公开，数据接口一律会话
+  校验，未登录跳登录页）。为让时间线/流水有真实数据源，新增两个只读会话
+  接口 `GET /api/me/timeline`（事件索引 + R2 事件体 + 离线代理审计并入）与
+  `GET /api/me/transactions`（credit_transactions），及 `POST /api/auth/logout`
 - 错误响应统一 JSON `{"error":"<CODE>","message":"..."}`，5xx 不外泄内部细节
-- 50 个 Rust 源文件、105 个单测、132 项端到端断言
+- 51 个 Rust 源文件、105 个单测、146 项端到端断言
 - L0 中立宪法草案 `l0-constitution/core.ttl`（rdflib 实测：140 三元组、9 原语、零 imports、零人类模板泄漏）
 
 ---
@@ -277,7 +289,8 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
 - L3 本体引擎未接（`ONTOLOGY_ENGINE_URL` 空时 L2 结果即最终结果）
 - oxigraph 未引入（M2 实例层入 RDF 后再评估）
 - WebSocket 广播 hub 为单 Durable Object 实例且订阅不做鉴权（与地图图层同为
-  公开只读面）；试运行量级足够，连接规模化与订阅鉴权待前端阶段一并设计
+  公开只读面）；试运行量级足够，连接规模化与订阅鉴权后续再议。前端地图页
+  已消费广播做实时刷新
 - 注册后**不会自动建订单**，需前端再调 `/api/payment/order`；注册响应里的
   `next: payment_required` 只是提示
 - L0 中立宪法仍是**草案**（`l0-constitution/` 未进构建）；`core.ttl` 尚未替换现有五域
@@ -292,7 +305,8 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
 - [ ] 接入真实 Cloudflare Workers Paid 部署并跑通 D1/Queues 线上语义
 - [ ] LLM 概念化最小闭环：从 agent 行为模式发现未命名模式 → 生成 Turtle 提案 → 过守门流水线
 - [ ] LLM 网关与 L3 本体引擎对接
-- [ ] MapLibre 前端（M2）；WebSocket 实时广播已落地（G8），待前端消费
+- [x] 前端入口（试运行 MVP）：原生 SPA（分身卡 / 时间线 / 资金 / SVG 地图 + WS 实时刷新）
+- [ ] MapLibre 前端（M2，替代当前 SVG 地图渲染）
 - [ ] oxigraph 实例层评估
 
 ---

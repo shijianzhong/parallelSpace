@@ -91,6 +91,18 @@ fn extract_token(req: &worker::Request) -> Option<String> {
     None
 }
 
+/// 注销会话（退出登录）：删除 KV 会话记录，返回过期 Cookie 串供 handler
+/// 下发。无会话时幂等（只回过期 Cookie），供前端入口的退出按钮使用。
+pub async fn destroy_session(req: &worker::Request, env: &Env) -> AppResult<String> {
+    if let Some(token) = extract_token(req) {
+        let kv = env.kv("KV")?;
+        kv.delete(&format!("session:{token}")).await?;
+    }
+    Ok(format!(
+        "{SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0"
+    ))
+}
+
 pub fn session_cookie(token: &str) -> String {
     format!(
         "{SESSION_COOKIE}={token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={SESSION_TTL_SECS}"
