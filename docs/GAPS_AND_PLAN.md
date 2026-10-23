@@ -22,7 +22,7 @@
 | G4 | **四个模块是死代码**：`sandbox::run_sandbox`、`arbitration::file_case`、`event::replay`、`offline_proxy::decide` 均无任何调用方、无路由；AGENTS 模板里承诺的 `analyze_impact` 根本不存在 | 调用图核查（仅 mod.rs re-export） | 逐个接线：sandbox/arbitration/replay 挂 admin 路由；offline_proxy 接入 action 提交路径（离线状态 agent 的不可逆动作 → Defer/Deny）；analyze_impact 新写（提案本体临时装载 + SPARQL 查受影响实例数） |
 | G5 | **PersonCard 链路缺失**：注册的 `narrative` 消毒后直接丢弃；agents 表无 card 字段；LLM 结构化 PersonCard 是 TODO(M2) | `api/auth.rs:6,37-44`；`migrations/0001` agents 表 | migration 0003 加 `person_card_rdf TEXT`；注册可选带 card 并先过 SHACL 才落库；激活接口（本轮新增）优先用已存 card。LLM 结构化等 G12 上游定版后接 |
 | G9 | **沙箱是假的**：`run_sandbox` 只校验绑定名存在，就无条件返回 `passed: true`，不装载提案本体、不跑 tick | `governance/sandbox.rs:34-55` | 提案 Turtle 装入沙箱 R2 → 用 reasonable 跑一致性 + SHACL 全量形状 → 结果如实返回；ticks 参数在真实仿真接入前从结果里移除，不要假报 |
-| G7 | **没有账号认证**：注册只有 email、无口令/会话；`GET /api/agent/:id`、`POST /api/action`、`POST /api/org` 全部无鉴权，任何人可冒充任何 agent_id 提交行动 | `api/auth.rs`、`api/agent.rs`、`api/action.rs` | 会话令牌（注册/登录发 token，KV 存会话）；action/org 校验 token 与 agent 归属；与现有 admin token 体系分开。属安全项，Phase 2 第一位 |
+| G7 | **没有账号认证**：注册只有 email、无口令/会话；`GET /api/agent/:id`、`POST /api/action`、`POST /api/org` 全部无鉴权，任何人可冒充任何 agent_id 提交行动 | `api/auth.rs`、`api/agent.rs`、`api/action.rs` | 会话令牌（注册/登录发 token，KV 存会话）；action/org 校验 token 与 agent 归属；与现有 admin token 体系分开。属安全项，Phase 2 第一位。**登录方案已定版（2026-10-23 用户拍板）**：治理后台走 Cloudflare Access（Google/GitHub + 邮箱白名单，零开发、随 G11 部署配置）；C 端三通道——邮箱验证码首发 + Google/GitHub OAuth；微信登录待开放平台资质排二期。详见文末 G7 细化设计 |
 | G8 | **地图是空壳**：Feature 的 `geometry` 恒为 `null`；bbox 只解析不下推过滤；无 locations 数据（agents.location_id 从未被写过）；前端目录不存在，MapLibre/PMTiles 未开始；DO 的 `/ws` 只 accept 后挂起，且 lib.rs 根本没有把请求转发到 DO 的路由，WebSocket 从外部不可达 | `api/map.rs:80-95`、`storage/do_state.rs:31`、`lib.rs` 路由表 | 先补位置数据模型（migration + 激活时写入 location）；map 输出真实 Point 几何并下推 bbox；lib.rs 加 `/api/ws` 转发到 DO；DO 内用 WebSocket hibernation 广播事件；前端单页（MapLibre CDN）放 Phase 3 |
 
 ### P2 — 外部依赖 / 运营（Phase 3，需用户拍板或提供资源）
@@ -95,3 +95,17 @@
 - **新增缺口（本日讨论产出，编号续排）**：G15 用户决策收件箱——出生设定（PersonCard）+ 重大不可逆事项审批，即 offline_proxy 的 DeferToOwner 落地（提案表 + 查询/审批接口）；G16 agent 经济闭环——Work/Trade 结算进 society money（agent_state/KV 热状态）、消费 sink、破产联动 dormant、收益自动结算到账号（本次已先落账本侧的 agent_earnings 入账函数）。两者排入 Phase 2 后段。
 
 - **已落地（同日）**：账本层三件套已实现并提交——`transfer_credits`（条件扣减 + 成对流水）、`credit_agent_earnings`（收益入账）、redeem 流程（migration 0003 + 申请冻结/审批 settle/驳回释放），接口均为 admin 代办；兑换价 1 积分 = 1 分（packages.rs 单点定义，单测钉住低于全部套餐单位买入价）。验收：单测 89 passed、smoke 67 通过 / 0 失败（新增第 12 节 10 项）。
+
+## 六、G7 细化设计（登录方案定版，2026-10-23）
+
+**分工**：Cloudflare Access 只管治理后台（单独子域 + Access 应用，Worker 验 `Cf-Access-Jwt-Assertion` 与邮箱白名单；现有 admin token 保留为应急通道）；C 端登录在应用内实现，不走 Access（席位收费不适合 C 端规模）。
+
+**账号模型**：`accounts` 保持邮箱唯一键；新增 `user_identities(account_id, provider, provider_subject, email)`，`UNIQUE(provider, provider_subject)`，一个账号可绑多个登录方式，同邮箱自动关联到同一账号。会话存 KV：`session:{token}` → account_id，token 为 256 位随机值，经 HttpOnly + Secure + SameSite=Lax Cookie 下发，TTL 30 天滑动续期；API 客户端可用 `Authorization: Bearer` 同 token。
+
+**通道一·邮箱验证码（首发）**：`POST /api/auth/email/start {email}` 生成 6 位码，KV 存哈希（`otp:{email}`，TTL 10 分钟、最多试 5 次、发送间隔 60 秒）；`POST /api/auth/email/verify {email, code}` 通过即建/找账号并下发会话。发信通道需定一家（Resend / AWS SES / Cloudflare Email Sending），属部署期决策。
+
+**通道二·Google / GitHub OAuth**：`GET /api/auth/oauth/:provider/start` 生成 state（KV，10 分钟）并 302 到授权页；callback 换 token 取 `sub` + email，upsert identity 后下发会话。密钥 `GOOGLE_CLIENT_ID/SECRET`、`GITHUB_CLIENT_ID/SECRET` 走 worker secret；GitHub 邮箱可能不公开，必须调 `/user/emails` 取已验证邮箱。
+
+**注册流程改造**：现 `POST /api/auth/register`（邮箱直建账号+分身）拆为两步——先登录（建账号壳），再 `POST /api/agent`（需会话）提交出身叙述建分身；旧 register 仅保留给 smoke 并标注内部用途，试运行前关闭其公网路由。
+
+**鉴权落点**：action / org / agent 激活后的自助操作（转让、兑换、收件箱审批）一律校验「会话账号 == 分身 account_id」；治理类（publish/approve/confirm/agent-earnings 代办）仍走 admin token / Access，两套体系互不替代。G13 的治理身份记录可直接复用 Access 签发的邮箱身份，`approved_by` 改为服务端从 JWT 取，不再收请求体自由文本。
