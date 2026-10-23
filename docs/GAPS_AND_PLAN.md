@@ -19,7 +19,7 @@
 
 | # | 缺失 | 证据 | 方案要点 |
 | --- | --- | --- | --- |
-| G4 | **四个模块是死代码**：`sandbox::run_sandbox`、`arbitration::file_case`、`event::replay`、`offline_proxy::decide` 均无任何调用方、无路由；AGENTS 模板里承诺的 `analyze_impact` 根本不存在 | 调用图核查（仅 mod.rs re-export） | 逐个接线：sandbox/arbitration/replay 挂 admin 路由；offline_proxy 接入 action 提交路径（离线状态 agent 的不可逆动作 → Defer/Deny）；analyze_impact 新写（提案本体临时装载 + SPARQL 查受影响实例数） | **已落地（2026-10-23，见第九节）：影响分析计数为结构化存储近似口径（完整 SPARQL 待 G14），Defer 暂不落 PendingDecision（G15 未拍板）** |
+| G4 | **四个模块是死代码**：`sandbox::run_sandbox`、`arbitration::file_case`、`event::replay`、`offline_proxy::decide` 均无任何调用方、无路由；AGENTS 模板里承诺的 `analyze_impact` 根本不存在 | 调用图核查（仅 mod.rs re-export） | 逐个接线：sandbox/arbitration/replay 挂 admin 路由；offline_proxy 接入 action 提交路径（离线状态 agent 的不可逆动作 → Defer/Deny）；analyze_impact 新写（提案本体临时装载 + SPARQL 查受影响实例数） | **已落地（2026-10-23，见第九节）：影响分析计数为结构化存储近似口径（完整 SPARQL 待 G14）；Defer 的 PendingDecision 已随 G15 于同日拍板并落地（见第十三/十四节）** |
 | G5 | **PersonCard 链路缺失**：注册的 `narrative` 消毒后直接丢弃；agents 表无 card 字段；LLM 结构化 PersonCard 是 TODO(M2) | `api/auth.rs:6,37-44`；`migrations/0001` agents 表 | migration 0003 加 `person_card_rdf TEXT`；注册可选带 card 并先过 SHACL 才落库；激活接口（本轮新增）优先用已存 card。LLM 结构化等 G12 上游定版后接。**已落地（2026-10-23，见第八节）：编号顺延为 migration 0005（0003/0004 已被 redeem/identities 占用）** |
 | G9 | **沙箱是假的**：`run_sandbox` 只校验绑定名存在，就无条件返回 `passed: true`，不装载提案本体、不跑 tick | `governance/sandbox.rs:34-55` | 提案 Turtle 装入沙箱 R2 → 用 reasonable 跑一致性 + SHACL 全量形状 → 结果如实返回；ticks 参数在真实仿真接入前从结果里移除，不要假报 |
 | G7 | **没有账号认证**：注册只有 email、无口令/会话；`GET /api/agent/:id`、`POST /api/action`、`POST /api/org` 全部无鉴权，任何人可冒充任何 agent_id 提交行动 | `api/auth.rs`、`api/agent.rs`、`api/action.rs` | 会话令牌（注册/登录发 token，KV 存会话）；action/org 校验 token 与 agent 归属；与现有 admin token 体系分开。属安全项，Phase 2 第一位。**登录方案已定版（2026-10-23 用户拍板）**：治理后台走 Cloudflare Access（Google/GitHub + 邮箱白名单，零开发、随 G11 部署配置）；C 端三通道——邮箱验证码首发 + Google/GitHub OAuth；微信登录待开放平台资质排二期。详见文末 G7 细化设计 |
@@ -167,3 +167,39 @@
 - **为时间线/流水补的两个只读会话接口**（如实标注：此前不存在用户侧读口——流水只有写账本函数、事件回放只有 admin 全局接口且不含审计）：`GET /api/me/timeline`（需会话；events_index 按 actor 查本人分身事件 + 回 R2 取事件体；离线代理审计不在事件流内，故按 `audit/{date}/` 前缀回扫近 14 天、扫描上限 500 个对象，命中本分身的 proxy_deferred/proxy_denied 并入，合并按时间倒序、limit 夹紧 1–100）与 `GET /api/me/transactions`（需会话；credit_transactions 按账号倒序）。另补 `POST /api/auth/logout`（删 KV 会话 + 过期 Cookie）供退出按钮。写路径未新增任何接口。
 - **验收**：cargo check（wasm32 --all-targets）通过、clippy 0 warning、单测 105 passed（与基线持平，本轮无新增 Rust 单测，覆盖走 smoke + 实跑）；本地 wrangler dev 实跑核验：全部页面/静态资源 200 且 content-type 正确，OTP 全流程以纯 Cookie 走通（start 回显 dev 码 → verify 下发 Cookie → /api/me 200 → 建分身 → 流水/时间线 200 → logout 后 401），坏卡 422 violations 形状与前端渲染预期一致，Node 直连 /api/ws 收到 connected；smoke 新增第 17 节 14 项（首页/登录/地图壳 200、app.js/app.css 200、无会话流水/时间线 401、流水余额与三类 type、时间线含 Defer 审计与已落事件、退出后 401），全量 **146 通过 / 0 失败**。
 - **未覆盖处**：OAuth 未用真实 client id/secret 端到端验证（本地未配密钥，按钮跳既有起点路由为止）；浏览器端交互未做真人点击验证（页面行为以 API/WS 协议级实跑 + JS 语法检查为准）；激活入口需治理员令牌（激活本就是治理动作，普通用户在 pending 只见状态说明）；WS 断线重连为页面级简单重试，广播不补发（靠时间线/回放补齐）；地图 SVG 只支持单外环 Polygon 的等经纬投影，MapLibre 仍在 M2。
+
+## 十三、G15 设计与定版：用户决策收件箱（2026-10-23 用户拍板）
+
+**拍板记录**：2026-10-23 用户明确「G15 开工，挂起 72 小时自动驳回」。本章为定版设计，落地记录见第十四节。
+
+**问题**：G4 接线后，离线代理的 Defer 语义是「拒绝 + 审计留痕」（`action.proxy_deferred`）——动作丢了，所有者上线也无从知晓、无法补批。G15 把 Defer 升级为「挂起待批」：不可逆动作生成待决项落库，所有者在决策收件箱里批准/驳回，批了才真正执行。
+
+**数据模型**（migration 0008 `pending_decisions`）：id（ULID）/ agent_id / account_id（归属者）/ action_type / payload（完整 ActionRequest JSON，批准重放用）/ status（pending / approved / rejected / expired）/ created_at / expires_at（created_at + 72h）/ decided_at / decided_by / event_id（批准落盘的事件）/ reject_reason / audit_id（创建审计关联）。索引：(account_id, status)、(agent_id, status)、(status, expires_at)。
+
+**闸门语义变更**：`POST /api/action` 的 proxy_gate 判定 DeferToOwner（Trade / Ally / Employ / Vote / Legislate，以 `offline_proxy::decide` 分类为准；契约类 marriage / major_contract / loan 仍无 HTTP 调用面，维持库级 `contract_class_deferred`）且分身存在时，不再直接拒绝：落 PendingDecision + 审计 `decision.pending_created`，响应保持 `accepted:false` + `proxy_decision:"defer_to_owner"` 并新增 `pending_decision_id`。Deny（Breach）保持直接拒绝（审计 `action.proxy_denied` 不变）；Allow 与所有者本人提交路径不变。分身不存在的极端情形无归属者可挂起，维持旧「拒绝 + `action.proxy_deferred` 审计」兜底。
+
+**72 小时自动驳回（expired）**：惰性过期为主——三处触发：① `GET /api/me/decisions` 读取收件箱时扫本账号；② approve / reject 尝试时先判该项；③ 调度 tick 顺带全局 sweep（沿用订单过期清理的同位钩子，不新造调度器）。过期 = 状态置 `expired`（语义等同自动驳回）+ 审计 `decision.expired`。批准一个已过期项 → 410 明确错误，不执行。
+
+**收件箱接口**（用户侧，需会话 + 归属校验，沿用 G7 模式；出账类同理，分身归属账号以外一律 403/不可见）：
+- `GET /api/me/decisions`：列本人分身的待决与历史（含已过期），待决在前、时间倒序。
+- `POST /api/me/decisions/:id/approve`：**以所有者身份把存储的动作重新走正常 action 入口**（`validate_action` SHACL 校验 + 事件落盘路径，与在线提交同一函数），禁止凭载荷绕过校验直落事件；校验不过 → 该项置 `rejected` + 回显 violations（422）；执行成功 → 置 `approved` 并记录 event_id + 审计 `decision.approved`。
+- `POST /api/me/decisions/:id/reject`：置 `rejected` + 审计 `decision.rejected`。
+- 重复决策 → 明确错误：已人工裁决（approved / rejected）再操作 → 409；已自动驳回（expired）再操作 → 410（与「批准已过期项」同一错误口径）。他人待决项 → 403（列表天然按账号隔离）。
+
+**前端**：`web/` 新增「决策收件箱」页签（时间线之后）：待决列表（分身、动作类型与关键参数中文摘要、发起时间、到期时间/剩余时限、批准/驳回按钮）+ 历史区（已批/已驳/已过期自动驳回，状态中文标注），操作结果如实回显。
+
+**红线（同步写入 AGENTS.md §5.9）**：① 批准必须重走 action 入口校验，不得绕过；② 72h 到期自动驳回，批准已过期项必须拒绝；③ 收件箱只批/驳，不提供修改待决动作载荷的入口（append-only 历史与载荷均不可改，所有者可改的只有目标/代理策略/充值/退休申请等既有宪法口径）。
+
+## 十四、G15 落地记录（2026-10-23）
+
+按第十三节定版实现并验收：
+
+- **表结构**：migration 0008 `pending_decisions`（id / agent_id / account_id / action_type / payload（完整 ActionRequest JSON）/ status（pending/approved/rejected/expired）/ created_at / expires_at / decided_at / decided_by / event_id / reject_reason / audit_id）；索引 (account_id, status, created_at)、(agent_id, status)、(status, expires_at)。
+- **闸门语义变化**：`proxy_gate` 的 Defer 分支由「拒绝 + `action.proxy_deferred` 审计」改为「落 PendingDecision + `decision.pending_created` 审计」，响应保持 `accepted:false` + `proxy_decision:"defer_to_owner"` 并新增 `pending_decision_id`；既有 smoke 第 15 节断言（defer_to_owner / accepted=false）不变、只加一条 pending_decision_id 断言。Deny 审计 `action.proxy_denied` 不变；Allow 与所有者本人提交路径不变。分身不存在时无归属者可挂起，保留旧拒绝路径 + `action.proxy_deferred` 兜底（该审计名因此仍在代码与时间线匹配清单中，仅兜底/历史用途）。时间线审计回扫同步纳入 `decision.pending_created / approved / rejected / expired`，前端时间线为四种决策审计各有中文呈现。
+- **落盘段共用**：`api/action.rs` 把「校验后执行」段抽为 `execute_validated_action`（Move 目的地校验 → 事件 append → 位置指针 → `action.submit` 审计），在线提交与批准重放共用同一函数——批准不绕校验是结构性的，不靠审批代码自觉。
+- **批准流程**：条件认领（`UPDATE ... WHERE status='pending'` 命中 1 行才继续）防重复/并发双批；认领后重走 `validate_action`，不过 → `reject_claimed_decision` 置 rejected + 422 回显 violations + `decision.rejected` 审计（reason=validation_failed_on_approve）；落盘段输入类拒绝（Move 目的地已不存在等 InvalidInput）同级置 rejected；其他基础设施错误回滚认领回 pending 可重试（批准只在事件落盘后才算数）。成功 → 回填 event_id + `decision.approved` 审计。
+- **过期机制落点**：惰性过期三处——`GET /api/me/decisions` 读取前扫本账号、approve/reject 入口先 classify（已到期先置 expired 再回 410）、`scheduler::run_tick` 在订单过期清理旁顺带全局 sweep（tick_metrics 新增 decisions_expired；沿用既有 tick，未新造调度器）。每次置 expired 写 `decision.expired` 审计，reject_reason 落「超过 72 小时未决策，系统自动驳回」。重复决策口径：已人工裁决再操作 409，已自动驳回（expired）再操作 410。
+- **接口**：`GET /api/me/decisions`（待决在前、时间倒序，上限 100；载荷只下发摘要，params 去 rdf 并以 has_rdf 标记）、`POST /api/me/decisions/:id/approve`、`POST /api/me/decisions/:id/reject`；均需会话，单项操作先归属校验（不存在 404、他人 403），前端页签 `/decisions`（时间线之后）。
+- **单测**：+6（到期时刻 = 创建 +72h 含跨月、过期边界含等号、classify 三态、载荷往返保真含 rdf、无 target 往返、坏载荷报错不 panic）+ error 映射新增 DECISION_EXPIRED 断言。DB 流程按全仓惯例由 smoke 覆盖（纯函数层无 D1 绑定）。
+- **验收**：cargo check（wasm32 --all-targets）0 error、clippy 0 warning、cargo test **111 passed**（基线 105）；本地 wrangler smoke **161/161**（基线 146：第 15 节 +1 挂起断言、第 17 节时间线断言改 decision.pending_created、第 18 节新增 14 条覆盖挂起可见/他人 403/批准落 event_id/重复批准 409/驳回/重复驳回 409/D1 改 expires_at 后读收件箱变 expired/批准已过期 410）。本地 D1（主库 + 沙箱库）已 apply 0008。
+- **近似与遗留**：① 契约类（marriage / major_contract / loan）仍只有 `offline_proxy::contract_class_deferred` 库级分类、无 HTTP 创建入口，故未经收件箱——与 G4 现状一致，本轮未新造入口；② 收件箱列表上限 100 条、无分页（试运行量级）；③ tick sweep 每轮上限 200 条；④ scheduler 在 kill switch 开启时整 tick 跳过，过期收敛靠读取/审批两处惰性过期兜底（语义不受影响）；⑤ 前端时间线对 G15 前的 `action.proxy_deferred` 历史审计保留旧呈现分支。

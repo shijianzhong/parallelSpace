@@ -13,6 +13,7 @@
     <a href="/" data-nav="home">我的分身</a>
     <a href="/create" data-nav="create">创建分身</a>
     <a href="/timeline" data-nav="timeline">生活时间线</a>
+    <a href="/decisions" data-nav="decisions">决策收件箱</a>
     <a href="/funds" data-nav="funds">资金</a>
     <a href="/map" data-nav="map">地图</a>
   </nav>
@@ -84,6 +85,17 @@
     <p class="muted">这里是分身的事件流（事实记录）。被离线代理闸门拦下的行动也会出现在这里，并注明原因；它们没有被执行。</p>
     <button id="timeline-refresh" type="button">刷新</button>
     <div id="timeline-body"></div>
+  </section>
+
+  <!-- 决策收件箱 -->
+  <section data-view="decisions" hidden>
+    <h1>决策收件箱</h1>
+    <p class="muted">你离线期间，分身发起的不可逆行动会挂在这里等你决定，<b>没有被执行</b>。批准后，动作会重新走一遍行动校验再执行；驳回则不执行。挂起超过 72 小时未处理的会自动驳回。这里只能批准或驳回，不能修改分身的行动内容。</p>
+    <button id="decisions-refresh" type="button">刷新</button>
+    <h2>待决</h2>
+    <div id="decisions-pending"></div>
+    <h2>历史</h2>
+    <div id="decisions-history"></div>
   </section>
 
   <!-- 资金 -->

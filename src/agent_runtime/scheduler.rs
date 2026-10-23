@@ -88,12 +88,16 @@ async fn run_tick(env: Env) -> AppResult<()> {
         .unwrap_or_default();
     let expired = crate::storage::d1::expire_stale_orders(&db, &cutoff).await?;
 
+    // 3b. G15 待决项 72h 自动驳回 sweep（惰性过期的 tick 落点，与订单
+    // 过期清理同位；读取/审批路径另有惰性过期，tick 只是加速收敛）。
+    let decisions_expired = crate::api::decisions::sweep_expired_decisions(&env).await?;
+
     // 4. 更新 tick 指标（KV）
     kv.put("last_tick", tick.to_string())?.execute().await?;
 
     logging::info(
         "tick_metrics",
-        serde_json::json!({ "tick": tick, "woken": woken, "orders_expired": expired }),
+        serde_json::json!({ "tick": tick, "woken": woken, "orders_expired": expired, "decisions_expired": decisions_expired }),
     );
     Ok(())
 }

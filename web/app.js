@@ -24,7 +24,7 @@ function setMsg(el, text, ok) {
   el.className = "msg " + (text ? (ok ? "ok" : "err") : "");
 }
 
-const VIEWS = { "/": "home", "/home": "home", "/login": "login", "/create": "create", "/timeline": "timeline", "/funds": "funds", "/map": "map" };
+const VIEWS = { "/": "home", "/home": "home", "/login": "login", "/create": "create", "/timeline": "timeline", "/decisions": "decisions", "/funds": "funds", "/map": "map" };
 const view = VIEWS[location.pathname] || "home";
 let me = null;          // /api/me 结果（登录后）
 let locationsCache = []; // /api/map/locations 的 features
@@ -91,7 +91,7 @@ async function initHome() {
       </form>
     </div>`;
   }
-  html += `<p><a href="/timeline">看生活时间线</a> · <a href="/map">去地图</a> · <a href="/funds">资金与流水</a></p></div>`;
+  html += `<p><a href="/timeline">看生活时间线</a> · <a href="/decisions">决策收件箱</a> · <a href="/map">去地图</a> · <a href="/funds">资金与流水</a></p></div>`;
   body.innerHTML = html;
 
   if (a.status === "pending") {
@@ -183,14 +183,31 @@ function renderTimeline(items) {
   return items.map((item) => {
     if (item.kind === "audit") {
       const f = item.fields || {};
+      const typeLine = `<p class="small muted">行动类型：${esc(ACTION_LABEL[f.action_type] || f.action_type || "")}（${esc(f.action_type || "")}）· 裁决：${esc(f.proxy_decision || "")}</p>`;
+      if (item.action === "decision.pending_created") {
+        return `<div class="tl-item audit">
+          <div class="t">行动已挂起待决（离线代理）</div>
+          <div class="meta">${esc(item.at)} · 审计记录</div>
+          <p>你离线期间，分身尝试了一个不可逆行动，已挂起到<a href="/decisions">决策收件箱</a>等你批准或驳回，<b>尚未执行</b>；挂起 72 小时未处理会自动驳回。</p>
+          ${typeLine}
+        </div>`;
+      }
+      if (item.action === "decision.approved" || item.action === "decision.rejected" || item.action === "decision.expired") {
+        const titles = { "decision.approved": "待决行动已批准并执行", "decision.rejected": "待决行动已被驳回", "decision.expired": "待决行动已过期（自动驳回）" };
+        return `<div class="tl-item audit">
+          <div class="t">${titles[item.action]}</div>
+          <div class="meta">${esc(item.at)} · 审计记录</div>
+          <p class="small muted">待决项 <code>${esc(f.pending_decision_id || "")}</code>${f.event_id ? ` · 事件 <code>${esc(f.event_id)}</code>` : ""}${f.reason ? ` · 原因：${esc(f.reason)}` : ""}</p>
+        </div>`;
+      }
       const deferred = item.action === "action.proxy_deferred";
       return `<div class="tl-item audit">
         <div class="t">${deferred ? "行动被暂缓（离线代理）" : "行动被拒绝（离线代理）"}</div>
         <div class="meta">${esc(item.at)} · 审计记录</div>
         <p>${deferred
-          ? "你离线期间，分身尝试了一个不可逆行动，已被离线代理闸门拦下，<b>没有执行</b>，等待你本人决定（决策收件箱尚未上线，先在此呈现）。"
+          ? "你离线期间，分身尝试了一个不可逆行动，已被离线代理闸门拦下，<b>没有执行</b>，等待你本人决定。（兜底/历史记录：这类行动现在会进入决策收件箱。）"
           : "你离线期间，分身尝试了一个代理无权同意的行动类别，已被离线代理闸门<b>直接拒绝</b>。"}</p>
-        <p class="small muted">行动类型：${esc(ACTION_LABEL[f.action_type] || f.action_type || "")}（${esc(f.action_type || "")}）· 裁决：${esc(f.proxy_decision || "")}</p>
+        ${typeLine}
       </div>`;
     }
     const p = item.payload;
@@ -212,6 +229,74 @@ async function initTimeline() {
     body.innerHTML = renderTimeline(r.data.items || []);
   };
   $("#timeline-refresh").addEventListener("click", load);
+  await load();
+}
+
+/* ---------------- 决策收件箱 ---------------- */
+const DECISION_STATUS = { pending: "待决", approved: "已批准", rejected: "已驳回", expired: "已过期（自动驳回）" };
+function decisionSummary(d) {
+  const parts = [`${ACTION_LABEL[d.action_type] || d.action_type}（${d.action_type}）`];
+  if (d.target_id) parts.push(`目标：${d.target_id}`);
+  const p = d.params || {};
+  const keys = Object.keys(p);
+  if (keys.length) parts.push(keys.map((k) => `${k}=${typeof p[k] === "object" ? JSON.stringify(p[k]) : p[k]}`).join("，"));
+  if (d.has_rdf) parts.push("含 RDF 行动说明");
+  return parts.join(" · ");
+}
+function remainingText(d) {
+  const ms = new Date(d.expires_at).getTime() - Date.now();
+  if (Number.isNaN(ms)) return "";
+  if (ms <= 0) return "已到期";
+  const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+  return `剩余约 ${h} 小时 ${m} 分`;
+}
+async function initDecisions() {
+  const pend = $("#decisions-pending"), hist = $("#decisions-history");
+  const load = async () => {
+    pend.innerHTML = `<p class="muted">加载中…</p>`;
+    hist.innerHTML = "";
+    const r = await api("/api/me/decisions");
+    if (r.status === 401) { location.replace("/login"); return; }
+    if (r.status !== 200 || !r.data) { pend.innerHTML = `<p class="msg err">${esc(errText(r, "收件箱加载失败"))}</p>`; return; }
+    const all = r.data.decisions || [];
+    const pending = all.filter((d) => d.status === "pending");
+    const history = all.filter((d) => d.status !== "pending");
+    pend.innerHTML = pending.length ? pending.map((d) => `
+      <div class="card decision" data-id="${esc(d.id)}">
+        <p><b>${esc(decisionSummary(d))}</b></p>
+        <p class="small muted">分身 <code>${esc(d.agent_id)}</code> · 发起于 ${esc(d.created_at)} · 到期 ${esc(d.expires_at)}（${esc(remainingText(d))}）</p>
+        <div class="row">
+          <button type="button" class="dec-approve">批准并执行</button>
+          <button type="button" class="dec-reject">驳回</button>
+          <span class="msg dec-msg"></span>
+        </div>
+      </div>`).join("") : `<p class="muted">暂无待决事项。</p>`;
+    hist.innerHTML = history.length ? history.map((d) => `
+      <div class="tl-item">
+        <div class="t">${esc(DECISION_STATUS[d.status] || d.status)} · ${esc(decisionSummary(d))}</div>
+        <div class="meta">发起 ${esc(d.created_at)}${d.decided_at ? ` · 裁决 ${esc(d.decided_at)}` : ""}${d.event_id ? ` · 事件 <code>${esc(d.event_id)}</code>` : ""}${d.reject_reason ? ` · ${esc(d.reject_reason)}` : ""}</div>
+      </div>`).join("") : `<p class="muted">暂无历史记录。</p>`;
+    pend.querySelectorAll(".decision").forEach((card) => {
+      const id = card.dataset.id;
+      const msg = card.querySelector(".dec-msg");
+      const act = async (kind) => {
+        setMsg(msg, kind === "approve" ? "批准中（重新校验并执行）…" : "驳回中…", true);
+        const r = await api(`/api/me/decisions/${encodeURIComponent(id)}/${kind}`, { method: "POST" });
+        if (r.status === 200 && r.data) {
+          setMsg(msg, kind === "approve" ? `已批准并执行，事件 ${r.data.event_id}` : "已驳回。", true);
+          setTimeout(load, 500);
+        } else if (r.status === 422 && r.data && Array.isArray(r.data.violations)) {
+          setMsg(msg, `行动校验未通过，已按驳回处理：${r.data.violations.map((v) => `${v.path}：${v.message}`).join("；")}`, false);
+          setTimeout(load, 1200);
+        } else {
+          setMsg(msg, errText(r, kind === "approve" ? "批准失败" : "驳回失败"), false);
+        }
+      };
+      card.querySelector(".dec-approve").addEventListener("click", () => act("approve"));
+      card.querySelector(".dec-reject").addEventListener("click", () => act("reject"));
+    });
+  };
+  $("#decisions-refresh").addEventListener("click", load);
   await load();
 }
 
@@ -384,6 +469,7 @@ function initLogin() {
   if (view === "home") await initHome();
   else if (view === "create") initCreate();
   else if (view === "timeline") await initTimeline();
+  else if (view === "decisions") await initDecisions();
   else if (view === "funds") await initFunds();
   else if (view === "map") await initMap();
 })();

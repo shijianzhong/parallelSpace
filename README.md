@@ -197,12 +197,12 @@ bash scripts/smoke.sh
 | 编译（dev） | `cargo check --target wasm32-unknown-unknown` | 0 error / 0 warning |
 | 编译（release） | `cargo build --release --target wasm32-unknown-unknown` | Finished |
 | Clippy（含测试目标） | `cargo clippy --target wasm32-unknown-unknown --all-targets` | 0 warning |
-| 单元测试 | `cargo test --target wasm32-unknown-unknown` | **89 passed / 0 failed** |
+| 单元测试 | `cargo test --target wasm32-unknown-unknown` | **111 passed / 0 failed** |
 | 迁移 SQL | `sqlite3 x.db < migrations/0001_init.sql` | 15 表，`foreign_key_check` / `integrity_check` ok |
 | 迁移 SQL（0002） | `wrangler d1 migrations apply <db> --local` | 域注册表 + versions 状态列 + 五域种子就位 |
 | Workers 打包 | `worker-build --release` | wasm + shim.mjs 产出成功 |
 | 本地运行时 | `wrangler dev --local` | 10 个绑定全部就绪，`/health` 200 |
-| 端到端冒烟 | `bash scripts/smoke.sh` | **78 通过 / 0 失败** |
+| 端到端冒烟 | `bash scripts/smoke.sh` | **161 通过 / 0 失败** |
 
 冒烟覆盖：注册 → 下单（服务端定价、忽略客户端金额、无账号 404）→ admin 令牌 401 →
 金额二次核对 409 → 入账 500 积分 → 幂等重放（余额不变）→ 同一流水号复用 409 →
@@ -275,8 +275,16 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
   校验，未登录跳登录页）。为让时间线/流水有真实数据源，新增两个只读会话
   接口 `GET /api/me/timeline`（事件索引 + R2 事件体 + 离线代理审计并入）与
   `GET /api/me/transactions`（credit_transactions），及 `POST /api/auth/logout`
+- **决策收件箱**（G15）：离线代理 Defer 由「拒绝 + 留痕」升级为「挂起待批」——
+  待决项落库（migration 0008 `pending_decisions`：完整动作载荷 + 72h 到期时刻），
+  闸门响应带 `pending_decision_id`；所有者在收件箱批准/驳回
+  （`GET /api/me/decisions`、`POST /api/me/decisions/{id}/approve|reject`，需会话 +
+  归属校验，他人 403）。批准时载荷**重新走正常 action 入口**（SHACL 校验 +
+  落盘同一函数），校验不过置 rejected 并 422 回显 violations；挂起 72 小时
+  未决自动驳回（expired，读取/审批/tick 三处惰性过期，批准已过期项 410）。
+  只批/驳，不提供修改载荷的入口。前端新增「决策收件箱」页签（待决 + 历史）
 - 错误响应统一 JSON `{"error":"<CODE>","message":"..."}`，5xx 不外泄内部细节
-- 51 个 Rust 源文件、105 个单测、146 项端到端断言
+- 52 个 Rust 源文件、111 个单测、161 项端到端断言
 - L0 中立宪法草案 `l0-constitution/core.ttl`（rdflib 实测：140 三元组、9 原语、零 imports、零人类模板泄漏）
 
 ---

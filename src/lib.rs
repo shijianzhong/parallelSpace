@@ -46,6 +46,9 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get_async("/timeline", |req, ctx| async move {
             api::into_router_result(api::web::index(req, ctx).await)
         })
+        .get_async("/decisions", |req, ctx| async move {
+            api::into_router_result(api::web::index(req, ctx).await)
+        })
         .get_async("/funds", |req, ctx| async move {
             api::into_router_result(api::web::index(req, ctx).await)
         })
@@ -88,6 +91,16 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         })
         .get_async("/api/me/transactions", |req, ctx| async move {
             api::into_router_result(api::payment::me_transactions(req, ctx).await)
+        })
+        // 决策收件箱（G15）：待决列表 + 批准/驳回，均需会话 + 归属校验
+        .get_async("/api/me/decisions", |req, ctx| async move {
+            api::into_router_result(api::decisions::list_decisions(req, ctx).await)
+        })
+        .post_async("/api/me/decisions/:id/approve", |req, ctx| async move {
+            api::into_router_result(api::decisions::approve_decision(req, ctx).await)
+        })
+        .post_async("/api/me/decisions/:id/reject", |req, ctx| async move {
+            api::into_router_result(api::decisions::reject_decision(req, ctx).await)
         })
         .post_async("/api/me/transfer", |req, ctx| async move {
             api::into_router_result(api::payment::me_transfer(req, ctx).await)

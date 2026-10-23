@@ -40,7 +40,7 @@ fn extract_move_destination(action: &ActionRequest) -> Option<String> {
         })
 }
 
-fn extract_rdf_payload(action: &ActionRequest) -> String {
+pub(crate) fn extract_rdf_payload(action: &ActionRequest) -> String {
     action
         .params
         .get("rdf")
@@ -74,17 +74,33 @@ pub async fn submit(mut req: worker::Request, ctx: RouteContext<()>) -> AppResul
     }
 
     // G4 离线代理闸门：所有者不在场时按 offline_proxy::decide 拦截
-    // 不可逆动作（Defer/Deny 写审计、不落事件）。放在 L2 校验之后，
+    // 不可逆动作（Defer 挂起待批 / Deny 直接拒绝）。放在 L2 校验之后，
     // 保证既有 SHACL 拒绝语义（violations 形态）不被闸门改变。
     if let Some(blocked) = proxy_gate(&req, &env, &action).await? {
         return Ok(blocked);
     }
 
+    let body = execute_validated_action(&env, &action, &rdf_payload, result.inferred.len()).await?;
+    Ok(Response::from_json(&body)?)
+}
+
+/// 校验通过后的落盘段：在线提交与 G15 决策批准重放共用同一函数。
+///
+/// 批准路径禁止自造落盘逻辑（AGENTS.md §5.9）：待决动作被批准时必须经
+/// `validate_action` + 本函数落盘，保证校验与落盘语义与在线提交完全
+/// 一致。返回成功响应体（accepted / event_id / inferred_count /
+/// location_id），批准方从中取 event_id 回填待决项。
+pub(crate) async fn execute_validated_action(
+    env: &worker::Env,
+    action: &ActionRequest,
+    rdf_payload: &str,
+    inferred_count: usize,
+) -> AppResult<serde_json::Value> {
     // G8 Move 落点：给了目的地就必须指向真实存在的地点（不存在 → 400，
     // 在落事件前拒绝，避免事件流里出现指向虚空的位置变更）。Move 不带
     // 目的地时只记事件、不改位置（locatedAt 可选，无公理要求每次 Move
     // 都携带可指称落点）。
-    let move_destination = extract_move_destination(&action);
+    let move_destination = extract_move_destination(action);
     if let Some(dest) = &move_destination {
         let db = env.d1("DB")?;
         if crate::storage::d1::get_location(&db, dest).await?.is_none() {
@@ -95,7 +111,7 @@ pub async fn submit(mut req: worker::Request, ctx: RouteContext<()>) -> AppResul
     }
 
     // 写事件（append-only）
-    let router = OntologyRouter::from_env(&env).await?;
+    let router = OntologyRouter::from_env(env).await?;
     let event_id = ulid::Ulid::generate().to_string();
     let payload = serde_json::json!({
         "agent_id": action.agent_id,
@@ -105,7 +121,7 @@ pub async fn submit(mut req: worker::Request, ctx: RouteContext<()>) -> AppResul
         "rdf": rdf_payload,
     });
     crate::event::log::append(
-        &env,
+        env,
         "http://soc.example/ontology#Action",
         &event_id,
         router.for_action().as_str(),
@@ -131,7 +147,7 @@ pub async fn submit(mut req: worker::Request, ctx: RouteContext<()>) -> AppResul
     }
 
     crate::governance::audit::record(
-        &env,
+        env,
         "action.submit",
         serde_json::json!({
             "agent_id": action.agent_id,
@@ -141,15 +157,15 @@ pub async fn submit(mut req: worker::Request, ctx: RouteContext<()>) -> AppResul
     )
     .await?;
 
-    Ok(Response::from_json(&serde_json::json!({
+    Ok(serde_json::json!({
         "accepted": true,
         "event_id": event_id,
-        "inferred_count": result.inferred.len(),
+        "inferred_count": inferred_count,
         "location_id": applied_location,
-    }))?)
+    }))
 }
 
-/// 离线代理闸门（G4 接线，agent_runtime::offline_proxy）。
+/// 离线代理闸门（G4 接线，agent_runtime::offline_proxy；G15 起 Defer = 挂起待批）。
 ///
 /// 「所有者在线」的定义：请求携带的会话账号正是分身的归属账号——
 /// 本人亲自提交时，决定权在本人，代理规则不介入（归属一致性已由
@@ -158,9 +174,12 @@ pub async fn submit(mut req: worker::Request, ctx: RouteContext<()>) -> AppResul
 /// 按 decide() 裁决：维持性动作（Move/Work/Learn/Chat）放行；
 /// 不可逆动作（Trade/Ally/Employ/Vote/Legislate）Defer；背叛类 Deny。
 ///
-/// 边界：Defer 目前只做到「拒绝本次提交 + 写审计 + 返回明确的
-/// proxy_decision 状态」——PendingDecision 落库与决策收件箱是 G15
-/// （未拍板），本次不建表、不建审批接口，动作不落事件、不排队等待。
+/// Defer 的落地（G15，AGENTS.md §5.9）：分身存在时生成 PendingDecision
+/// 落库 + 审计 `decision.pending_created`，响应保持 `accepted:false` +
+/// `proxy_decision:"defer_to_owner"` 并带 `pending_decision_id`，所有者在
+/// 决策收件箱批/驳（72 小时未决自动驳回）。分身不存在时无归属者可挂起，
+/// 维持 G4 路径：拒绝 + `action.proxy_deferred` 审计兜底。
+/// Deny 保持直接拒绝（审计 `action.proxy_denied`），不进收件箱。
 async fn proxy_gate(
     req: &worker::Request,
     env: &worker::Env,
@@ -168,14 +187,13 @@ async fn proxy_gate(
 ) -> AppResult<Option<Response>> {
     use crate::agent_runtime::offline_proxy::{decide, ProxyDecision};
 
+    let db = env.d1("DB")?;
+    let agent = crate::storage::d1::get_agent(&db, &action.agent_id).await?;
     let owner_present = match crate::api::session::resolve_session(req, env).await? {
-        Some(account_id) => {
-            let db = env.d1("DB")?;
-            match crate::storage::d1::get_agent(&db, &action.agent_id).await? {
-                Some(agent) => agent.account_id == account_id,
-                None => false,
-            }
-        }
+        Some(account_id) => agent
+            .as_ref()
+            .map(|a| a.account_id == account_id)
+            .unwrap_or(false),
         None => false,
     };
     if owner_present {
@@ -183,32 +201,81 @@ async fn proxy_gate(
     }
 
     let decision = decide(action.action_type);
-    let (audit_action, reason) = match decision {
-        ProxyDecision::Allow => return Ok(None),
-        ProxyDecision::DeferToOwner => (
-            "action.proxy_deferred",
-            "owner offline: irreversible action deferred to owner; not executed (pending-decision inbox is G15, not yet built)",
-        ),
-        ProxyDecision::Deny => (
-            "action.proxy_denied",
-            "owner offline: offline proxy must never approve this action class",
-        ),
-    };
-    crate::governance::audit::record(
-        env,
-        audit_action,
-        serde_json::json!({
-            "agent_id": action.agent_id,
-            "action_type": action.action_type.to_string(),
-            "proxy_decision": decision.as_str(),
-        }),
-    )
-    .await?;
-    Ok(Some(Response::from_json(&serde_json::json!({
-        "accepted": false,
-        "proxy_decision": decision.as_str(),
-        "reason": reason,
-    }))?))
+    match decision {
+        ProxyDecision::Allow => Ok(None),
+        ProxyDecision::Deny => {
+            crate::governance::audit::record(
+                env,
+                "action.proxy_denied",
+                serde_json::json!({
+                    "agent_id": action.agent_id,
+                    "action_type": action.action_type.to_string(),
+                    "proxy_decision": decision.as_str(),
+                }),
+            )
+            .await?;
+            Ok(Some(Response::from_json(&serde_json::json!({
+                "accepted": false,
+                "proxy_decision": decision.as_str(),
+                "reason": "owner offline: offline proxy must never approve this action class",
+            }))?))
+        }
+        ProxyDecision::DeferToOwner => {
+            let Some(agent) = agent else {
+                // 分身不存在：无归属者可挂起待批，维持 G4 的拒绝 + 审计兜底。
+                crate::governance::audit::record(
+                    env,
+                    "action.proxy_deferred",
+                    serde_json::json!({
+                        "agent_id": action.agent_id,
+                        "action_type": action.action_type.to_string(),
+                        "proxy_decision": decision.as_str(),
+                    }),
+                )
+                .await?;
+                return Ok(Some(Response::from_json(&serde_json::json!({
+                    "accepted": false,
+                    "proxy_decision": decision.as_str(),
+                    "reason": "owner offline: irreversible action deferred to owner; agent not found, no pending decision created",
+                }))?));
+            };
+            // G15 挂起待批：落 PendingDecision + 创建审计，响应带待决项 id。
+            let created_at = crate::common::types::now_rfc3339();
+            let expires_at = crate::api::decisions::expires_at_for(&created_at);
+            let decision_id = ulid::Ulid::generate().to_string();
+            let audit_id = crate::governance::audit::record(
+                env,
+                "decision.pending_created",
+                serde_json::json!({
+                    "agent_id": action.agent_id,
+                    "account_id": agent.account_id,
+                    "action_type": action.action_type.to_string(),
+                    "proxy_decision": decision.as_str(),
+                    "pending_decision_id": decision_id,
+                    "expires_at": expires_at,
+                }),
+            )
+            .await?;
+            crate::storage::d1::create_pending_decision(
+                &db,
+                &decision_id,
+                &action.agent_id,
+                &agent.account_id,
+                &action.action_type.to_string(),
+                &crate::api::decisions::serialize_payload(action),
+                Some(&audit_id),
+                &created_at,
+                &expires_at,
+            )
+            .await?;
+            Ok(Some(Response::from_json(&serde_json::json!({
+                "accepted": false,
+                "proxy_decision": decision.as_str(),
+                "reason": "owner offline: irreversible action held as pending decision for owner approval (auto-rejects after 72h)",
+                "pending_decision_id": decision_id,
+            }))?))
+        }
+    }
 }
 
 #[cfg(test)]

@@ -274,10 +274,11 @@ struct AuditRecord {
 /// 数据源全部为既有事实记录，不造数：
 /// - 事件：events_index 里 actor = 本人分身的行（倒序），事件体按
 ///   events/{tick}/{id}.json 回 R2 取 payload；取不到时 payload 为 null。
-/// - 离线代理审计（G4）：proxy_gate 拦下的动作只写审计（R2 audit/{date}/，
-///   不落事件），故按日期前缀回扫近 14 天、命中本分身的
-///   action.proxy_deferred / action.proxy_denied 并入时间线；扫描对象数
-///   有上限（500），超限即停（试运行量级足够，注释如实标注）。
+/// - 离线代理与决策审计（G4/G15）：proxy_gate 拦下的动作与决策收件箱的
+///   裁决只写审计（R2 audit/{date}/，不落事件），故按日期前缀回扫近
+///   14 天、命中本分身的 action.proxy_deferred / action.proxy_denied /
+///   decision.* 并入时间线；扫描对象数有上限（500），超限即停
+///   （试运行量级足够，注释如实标注）。
 pub async fn me_timeline(req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
     let env = ctx.env.clone();
     let account_id = session::require_session(&req, &env).await?;
@@ -340,7 +341,12 @@ pub async fn me_timeline(req: worker::Request, ctx: RouteContext<()>) -> AppResu
             if let Some(rec) = rec {
                 let hit = matches!(
                     rec.action.as_str(),
-                    "action.proxy_deferred" | "action.proxy_denied"
+                    "action.proxy_deferred"
+                        | "action.proxy_denied"
+                        | "decision.pending_created"
+                        | "decision.approved"
+                        | "decision.rejected"
+                        | "decision.expired"
                 ) && rec.fields.get("agent_id").and_then(|v| v.as_str())
                     == Some(agent.id.as_str());
                 if hit {

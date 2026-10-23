@@ -1063,3 +1063,232 @@ pub async fn list_events_by_actor(
         .results()?;
     Ok(rows)
 }
+
+// ---- 用户决策收件箱（G15，migration 0008）----
+
+/// 待决项行。payload 是完整 ActionRequest JSON（批准重放用），只批/驳不改。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PendingDecisionRow {
+    pub id: String,
+    pub agent_id: String,
+    pub account_id: String,
+    pub action_type: String,
+    pub payload: String,
+    /// pending / approved / rejected / expired（72h 未决自动驳回）
+    pub status: String,
+    pub created_at: String,
+    pub expires_at: String,
+    pub decided_at: Option<String>,
+    pub decided_by: Option<String>,
+    /// 批准执行后落盘的事件 id；未执行为 None。
+    pub event_id: Option<String>,
+    pub reject_reason: Option<String>,
+    /// 创建时的 decision.pending_created 审计记录 id（审计关联）。
+    pub audit_id: Option<String>,
+}
+
+const PENDING_DECISION_COLS: &str = "id, agent_id, account_id, action_type, payload, status, \
+    created_at, expires_at, decided_at, decided_by, event_id, reject_reason, audit_id";
+
+/// 落一条待决项（离线代理 Defer 时由 proxy_gate 调用）。
+#[allow(clippy::too_many_arguments)]
+pub async fn create_pending_decision(
+    db: &D1Database,
+    id: &str,
+    agent_id: &str,
+    account_id: &str,
+    action_type: &str,
+    payload_json: &str,
+    audit_id: Option<&str>,
+    created_at: &str,
+    expires_at: &str,
+) -> AppResult<()> {
+    batch_write(
+        db,
+        vec![db
+            .prepare(
+                "INSERT INTO pending_decisions \
+                 (id, agent_id, account_id, action_type, payload, status, created_at, expires_at, audit_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'pending', ?6, ?7, ?8)",
+            )
+            .bind(&[
+                s(id),
+                s(agent_id),
+                s(account_id),
+                s(action_type),
+                s(payload_json),
+                s(created_at),
+                s(expires_at),
+                opt_s(audit_id),
+            ])?],
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn get_pending_decision(
+    db: &D1Database,
+    id: &str,
+) -> AppResult<Option<PendingDecisionRow>> {
+    Ok(db
+        .prepare(format!(
+            "SELECT {PENDING_DECISION_COLS} FROM pending_decisions WHERE id = ?1"
+        ))
+        .bind(&[s(id)])?
+        .first::<PendingDecisionRow>(None)
+        .await?)
+}
+
+/// 某账号的待决与历史：待决在前，其余按创建时间倒序。
+pub async fn list_pending_decisions_by_account(
+    db: &D1Database,
+    account_id: &str,
+    limit: u32,
+) -> AppResult<Vec<PendingDecisionRow>> {
+    let rows: Vec<PendingDecisionRow> = db
+        .prepare(format!(
+            "SELECT {PENDING_DECISION_COLS} FROM pending_decisions WHERE account_id = ?1 \
+             ORDER BY (status = 'pending') DESC, created_at DESC, id DESC LIMIT ?2"
+        ))
+        .bind(&[s(account_id), n(limit as i64)])?
+        .all()
+        .await?
+        .results()?;
+    Ok(rows)
+}
+
+/// 条件裁决待决项：仅当前仍为 pending 时才迁移到目标状态（防重复决策 /
+/// 并发双裁，与 decide_redeem_request 同款写法）。返回是否命中 1 行。
+pub async fn transition_pending_decision(
+    db: &D1Database,
+    id: &str,
+    to_status: &str,
+    decided_by: Option<&str>,
+    decided_at: &str,
+    reject_reason: Option<&str>,
+) -> AppResult<bool> {
+    let results = batch_write(
+        db,
+        vec![db
+            .prepare(
+                "UPDATE pending_decisions \
+                 SET status = ?2, decided_by = ?3, decided_at = ?4, reject_reason = ?5 \
+                 WHERE id = ?1 AND status = 'pending'",
+            )
+            .bind(&[
+                s(id),
+                s(to_status),
+                opt_s(decided_by),
+                s(decided_at),
+                opt_s(reject_reason),
+            ])?],
+    )
+    .await?;
+    let changes = results
+        .first()
+        .and_then(|r| r.meta().ok().flatten())
+        .and_then(|m| m.changes)
+        .unwrap_or(0);
+    Ok(changes == 1)
+}
+
+/// 批准已认领（status='approved'）后回填落盘事件 id。
+pub async fn set_pending_decision_event(
+    db: &D1Database,
+    id: &str,
+    event_id: &str,
+) -> AppResult<()> {
+    batch_write(
+        db,
+        vec![db
+            .prepare(
+                "UPDATE pending_decisions SET event_id = ?2 \
+                 WHERE id = ?1 AND status = 'approved'",
+            )
+            .bind(&[s(id), s(event_id)])?],
+    )
+    .await?;
+    Ok(())
+}
+
+/// 批准认领后校验不过：approved → rejected（终局），写明原因。
+/// 只允许从刚认领的 approved 态迁移，避免覆盖并发的其它裁决。
+pub async fn reject_claimed_decision(
+    db: &D1Database,
+    id: &str,
+    reject_reason: &str,
+) -> AppResult<bool> {
+    let results = batch_write(
+        db,
+        vec![db
+            .prepare(
+                "UPDATE pending_decisions SET status = 'rejected', reject_reason = ?2 \
+                 WHERE id = ?1 AND status = 'approved'",
+            )
+            .bind(&[s(id), s(reject_reason)])?],
+    )
+    .await?;
+    let changes = results
+        .first()
+        .and_then(|r| r.meta().ok().flatten())
+        .and_then(|m| m.changes)
+        .unwrap_or(0);
+    Ok(changes == 1)
+}
+
+/// 批准认领后执行期基础设施失败：approved → pending 回滚认领
+/// （清 decided_*），让所有者可重试——批准只在事件真正落盘后才算数。
+pub async fn revert_decision_claim(db: &D1Database, id: &str) -> AppResult<bool> {
+    let results = batch_write(
+        db,
+        vec![db
+            .prepare(
+                "UPDATE pending_decisions \
+                 SET status = 'pending', decided_by = NULL, decided_at = NULL \
+                 WHERE id = ?1 AND status = 'approved' AND event_id IS NULL",
+            )
+            .bind(&[s(id)])?],
+    )
+    .await?;
+    let changes = results
+        .first()
+        .and_then(|r| r.meta().ok().flatten())
+        .and_then(|m| m.changes)
+        .unwrap_or(0);
+    Ok(changes == 1)
+}
+
+/// 已到期未决项（惰性过期的数据源）：status='pending' 且 expires_at <= now。
+/// account_id 给出时只扫该账号（收件箱读取路径）；全局 sweep（tick）传 None。
+pub async fn list_expired_pending_decisions(
+    db: &D1Database,
+    account_id: Option<&str>,
+    now_rfc3339: &str,
+    limit: u32,
+) -> AppResult<Vec<PendingDecisionRow>> {
+    let rows: Vec<PendingDecisionRow> = match account_id {
+        Some(acc) => {
+            db.prepare(format!(
+                "SELECT {PENDING_DECISION_COLS} FROM pending_decisions \
+                 WHERE account_id = ?1 AND status = 'pending' AND expires_at <= ?2 \
+                 ORDER BY expires_at ASC LIMIT ?3"
+            ))
+            .bind(&[s(acc), s(now_rfc3339), n(limit as i64)])?
+            .all()
+            .await?
+            .results()?
+        }
+        None => {
+            db.prepare(format!(
+                "SELECT {PENDING_DECISION_COLS} FROM pending_decisions \
+                 WHERE status = 'pending' AND expires_at <= ?1 \
+                 ORDER BY expires_at ASC LIMIT ?2"
+            ))
+            .bind(&[s(now_rfc3339), n(limit as i64)])?
+            .all()
+            .await?
+            .results()?
+        }
+    };
+    Ok(rows)
+}

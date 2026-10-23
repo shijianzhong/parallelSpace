@@ -28,6 +28,9 @@ pub enum AppError {
     PaymentAlreadyConfirmed,
     #[error("payment order expired")]
     PaymentOrderExpired,
+    /// 待决项已过 72 小时自动驳回（G15）：批准/驳回一个已过期项时返回。
+    #[error("decision expired: {0}")]
+    DecisionExpired(String),
     #[error("db error: {0}")]
     Db(String),
     #[error("ontology engine error: {0}")]
@@ -68,6 +71,7 @@ impl AppError {
             AppError::OntologyVersionNotFound(_) => (400, "ONTOLOGY_VERSION_NOT_FOUND"),
             AppError::PaymentAlreadyConfirmed => (409, "PAYMENT_ALREADY_CONFIRMED"),
             AppError::PaymentOrderExpired => (410, "PAYMENT_ORDER_EXPIRED"),
+            AppError::DecisionExpired(_) => (410, "DECISION_EXPIRED"),
             AppError::Db(_)
             | AppError::OntologyEngine(_)
             | AppError::Llm(_)
@@ -138,6 +142,10 @@ mod tests {
         assert_eq!(
             AppError::PaymentOrderExpired.http_mapping(),
             (410, "PAYMENT_ORDER_EXPIRED")
+        );
+        assert_eq!(
+            AppError::DecisionExpired("d1".into()).http_mapping(),
+            (410, "DECISION_EXPIRED")
         );
         for e in [
             AppError::Db("x".into()),

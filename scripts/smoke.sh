@@ -442,6 +442,7 @@ mkaction7() { python3 -c 'import json,os;rdf=open(os.environ["RDF_FILE"]).read()
 DEF=$(post /api/action "$(AGID="$AG3" ACT=trade RDF_FILE="$TTL_DIR7/good.ttl" mkaction7)")
 chk "离线 trade 被 Defer" defer_to_owner "$(echo "$DEF" | get proxy_decision)"
 chk "离线 trade accepted=false" False "$(echo "$DEF" | get accepted)"
+chk "离线 trade 已挂起待批（G15 pending_decision_id）" yes "$([ -n "$(echo "$DEF" | get pending_decision_id)" ] && echo yes || echo no)"
 DEN=$(post /api/action "$(AGID="$AG3" ACT=breach RDF_FILE="$TTL_DIR7/good.ttl" mkaction7)")
 chk "离线 breach 被 Deny" deny "$(echo "$DEN" | get proxy_decision)"
 WRK=$(post /api/action "$(AGID="$AG3" ACT=work RDF_FILE="$TTL_DIR7/good.ttl" mkaction7)")
@@ -560,11 +561,83 @@ TXN17=$(curl -s --max-time 10 "$BASE/api/me/transactions?limit=100" -H "Authoriz
 chk "流水余额 = 50（120 收益 -40 兑换 -30 转让）" 50 "$(echo "$TXN17" | get balance)"
 chk "流水含 agent_earnings / redeem_hold / transfer_out" yes "$(echo "$TXN17" | python3 -c "import sys,json;ts={t['type'] for t in json.load(sys.stdin)['transactions']};print('yes' if {'agent_earnings','redeem_hold','transfer_out'} <= ts else 'no')" 2>/dev/null || echo no)"
 TL17=$(curl -s --max-time 20 "$BASE/api/me/timeline?limit=100" -H "Authorization: Bearer $TOKEN2")
-chk "时间线含离线代理 Defer 审计" yes "$(echo "$TL17" | python3 -c "import sys,json;print('yes' if any(i.get('kind')=='audit' and i.get('action')=='action.proxy_deferred' for i in json.load(sys.stdin)['items']) else 'no')" 2>/dev/null || echo no)"
+chk "时间线含决策挂起审计（G15 decision.pending_created）" yes "$(echo "$TL17" | python3 -c "import sys,json;print('yes' if any(i.get('kind')=='audit' and i.get('action')=='decision.pending_created' for i in json.load(sys.stdin)['items']) else 'no')" 2>/dev/null || echo no)"
 chk "时间线含已落事件（第 15 节 work/trade）" yes "$(echo "$TL17" | python3 -c "import sys,json;print('yes' if any(i.get('kind')=='event' for i in json.load(sys.stdin)['items']) else 'no')" 2>/dev/null || echo no)"
 # 退出登录：删会话后同一 token 失效（TOKEN2 至此使命完成，放最后）
 chk "退出登录 = 200" 200 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$BASE/api/auth/logout" -H "Authorization: Bearer $TOKEN2")"
 chk "退出后 /api/me = 401" 401 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE/api/me" -H "Authorization: Bearer $TOKEN2")"
+
+echo "== 18. G15 决策收件箱：挂起 → 批准落事件 / 驳回 / 72h 自动驳回"
+# TOKEN2 已在第 17 节退出，本节自建两个会话：分身所有者 + 无关他人
+DECEMAIL="dec-$RUN_ID@example.com"
+P="{\"email\":\"$DECEMAIL\"}"
+START18=$(post /api/auth/email/start "$P")
+CODE18=$(echo "$START18" | get dev_code)
+P="{\"email\":\"$DECEMAIL\",\"code\":\"$CODE18\"}"
+VER18=$(post /api/auth/email/verify "$P")
+TOKEN3=$(echo "$VER18" | get token)
+P='{"narrative":"g15 smoke agent"}'
+NA18=$(post /api/agent "$P" -H "Authorization: Bearer $TOKEN3")
+AG18=$(echo "$NA18" | get agent_id)
+chk "G15 验收分身已建" yes "$([ -n "$AG18" ] && echo yes || echo no)"
+OTHEREMAIL="other-$RUN_ID@example.com"
+P="{\"email\":\"$OTHEREMAIL\"}"
+START18B=$(post /api/auth/email/start "$P")
+CODE18B=$(echo "$START18B" | get dev_code)
+P="{\"email\":\"$OTHEREMAIL\",\"code\":\"$CODE18B\"}"
+VER18B=$(post /api/auth/email/verify "$P")
+TOKEN4=$(echo "$VER18B" | get token)
+chk "无会话读收件箱 = 401" 401 "$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$BASE/api/me/decisions")"
+# 动作负载：与第 15 节同款 good 图（SHACL 按 targetClass 选形状，与动作类型无关）
+TTL_DIR18=$(mktemp -d)
+cat > "$TTL_DIR18/good.ttl" <<'TTL'
+@prefix soc: <http://soc.example/ontology#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+<urn:agent:smoke> a soc:Person ;
+    soc:status "active" ;
+    soc:displayName "n" ;
+    soc:locatedAt <urn:l:1> ;
+    soc:hasSkill <urn:s:1> ;
+    soc:hasGoal <urn:g:1> ;
+    soc:reputation "0.5"^^xsd:decimal .
+<urn:l:1> a soc:Location .
+<urn:s:1> a soc:Skill .
+<urn:g:1> a soc:Goal .
+TTL
+mkaction18() { python3 -c 'import json,os;rdf=open(os.environ["RDF_FILE"]).read();print(json.dumps({"agent_id":os.environ["AGID"],"action_type":os.environ["ACT"],"params":{"rdf":rdf}}))'; }
+# 1) 离线 trade → 挂起待批，响应带 pending_decision_id
+D1=$(post /api/action "$(AGID="$AG18" ACT=trade RDF_FILE="$TTL_DIR18/good.ttl" mkaction18)")
+DID1=$(echo "$D1" | get pending_decision_id)
+chk "离线 trade 挂起带 pending_decision_id" yes "$([ -n "$DID1" ] && echo yes || echo no)"
+# 2) 收件箱可见（pending）；他人看不到、批不了
+BOX=$(curl -s --max-time 10 "$BASE/api/me/decisions" -H "Authorization: Bearer $TOKEN3")
+chk "收件箱含该待决项（pending）" yes "$(echo "$BOX" | python3 -c "import sys,json;ds=json.load(sys.stdin)['decisions'];print('yes' if any(d['id']=='$DID1' and d['status']=='pending' for d in ds) else 'no')" 2>/dev/null || echo no)"
+BOX4=$(curl -s --max-time 10 "$BASE/api/me/decisions" -H "Authorization: Bearer $TOKEN4")
+chk "他人收件箱看不到该待决项" no "$(echo "$BOX4" | python3 -c "import sys,json;print('yes' if any(d['id']=='$DID1' for d in json.load(sys.stdin)['decisions']) else 'no')" 2>/dev/null || echo no)"
+P='{}'
+chk "他人批准待决项 = 403" 403 "$(post_code "/api/me/decisions/$DID1/approve" "$P" -H "Authorization: Bearer $TOKEN4")"
+# 3) 所有者批准 → 重走校验落事件，状态 approved + event_id；重复批准 = 409
+APP1=$(post "/api/me/decisions/$DID1/approve" "$P" -H "Authorization: Bearer $TOKEN3")
+chk "批准返回 approved" approved "$(echo "$APP1" | get status)"
+EV1=$(echo "$APP1" | get event_id)
+chk "批准返回 event_id（事件已落盘）" yes "$([ -n "$EV1" ] && echo yes || echo no)"
+BOX=$(curl -s --max-time 10 "$BASE/api/me/decisions" -H "Authorization: Bearer $TOKEN3")
+chk "收件箱该项 approved 且 event_id 一致" yes "$(echo "$BOX" | python3 -c "import sys,json;ds=json.load(sys.stdin)['decisions'];print('yes' if any(d['id']=='$DID1' and d['status']=='approved' and d.get('event_id')=='$EV1' for d in ds) else 'no')" 2>/dev/null || echo no)"
+chk "重复批准 = 409" 409 "$(post_code "/api/me/decisions/$DID1/approve" "$P" -H "Authorization: Bearer $TOKEN3")"
+# 4) 第二项（ally）→ 驳回；重复驳回 = 409
+D2=$(post /api/action "$(AGID="$AG18" ACT=ally RDF_FILE="$TTL_DIR18/good.ttl" mkaction18)")
+DID2=$(echo "$D2" | get pending_decision_id)
+REJ2=$(post "/api/me/decisions/$DID2/reject" "$P" -H "Authorization: Bearer $TOKEN3")
+chk "驳回返回 rejected" rejected "$(echo "$REJ2" | get status)"
+chk "重复驳回 = 409" 409 "$(post_code "/api/me/decisions/$DID2/reject" "$P" -H "Authorization: Bearer $TOKEN3")"
+# 5) 第三项（vote）→ 本地 D1 把 expires_at 改到过去 → 读收件箱惰性过期 = expired；批准已过期项 = 410
+D3=$(post /api/action "$(AGID="$AG18" ACT=vote RDF_FILE="$TTL_DIR18/good.ttl" mkaction18)")
+DID3=$(echo "$D3" | get pending_decision_id)
+npx wrangler d1 execute parallelspace-db --local --command "UPDATE pending_decisions SET expires_at = '2000-01-01T00:00:00+00:00' WHERE id = '$DID3'" >/dev/null 2>&1
+BOX=$(curl -s --max-time 10 "$BASE/api/me/decisions" -H "Authorization: Bearer $TOKEN3")
+chk "过期项读收件箱后 = expired（72h 自动驳回）" yes "$(echo "$BOX" | python3 -c "import sys,json;ds=json.load(sys.stdin)['decisions'];print('yes' if any(d['id']=='$DID3' and d['status']=='expired' for d in ds) else 'no')" 2>/dev/null || echo no)"
+chk "批准已过期项 = 410" 410 "$(post_code "/api/me/decisions/$DID3/approve" "$P" -H "Authorization: Bearer $TOKEN3")"
+rm -rf "$TTL_DIR18"
 
 echo
 echo "结果：$pass 通过 / $fail 失败"

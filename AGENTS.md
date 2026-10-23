@@ -101,7 +101,7 @@ scripts/
 web/                       # 前端入口静态文件（index.html / app.css / app.js，编译期 include_str! 内嵌，src/api/web.rs 托管）
 src/
 ├── lib.rs                 # fetch 入口 + 路由
-├── api/{auth,oauth,session,agent,action,org,map,payment,admin,web}.rs  # web.rs = 前端入口静态托管
+├── api/{auth,oauth,session,agent,action,decisions,org,map,payment,admin,web}.rs  # web.rs = 前端入口静态托管；decisions.rs = 决策收件箱（G15）
 ├── ontology/{iri,version,sparql,shacl,reason}.rs
 ├── agent_runtime/{scheduler,lifecycle,decision,offline_proxy}.rs
 ├── llm/{gateway,router,cache}.rs
@@ -190,6 +190,15 @@ src/
 - **OAuth**：state 必须存 KV 并在回调时比对后删除；只接受已验证邮箱（Google 看 `email_verified`，GitHub 走 `/user/emails` 取 primary+verified）；身份绑定以 `(provider, provider_subject)` 唯一，同邮箱关联同一账号，不许抢绑覆盖。
 - **归属校验**：action 等以 agent 为主体的接口走 `session::enforce_ownership`——带会话必须与分身归属一致；`REQUIRE_AUTH=true`（试运行部署时打开）后无会话一律 401。自助资金接口（/api/me/*）的出账方固定取会话账号，请求体不得指定 from。
 - **注册拆分**：新流程为登录（建账号壳）→ `POST /api/agent`（需会话）建分身；旧 `/api/auth/register` 仅作内部/smoke 兼容，试运行部署时关闭其公网路由。
+
+#### 5.9 决策收件箱（G15，2026-10-23 拍板并落地）
+
+产品定调（用户 2026-10-23 拍板）：离线代理的 Defer 不是拒绝，而是**挂起待批**；挂起 **72 小时**未决策**自动驳回**。设计与落地记录见 docs/GAPS_AND_PLAN.md 第十三/十四节。
+
+- **挂起落库**：proxy_gate 判定 DeferToOwner 且分身存在时，生成 PendingDecision（migration 0008 `pending_decisions`：完整 ActionRequest 载荷 + `expires_at = created_at + 72h`）+ 审计 `decision.pending_created`，响应保持 `accepted:false` / `proxy_decision:"defer_to_owner"` 并带 `pending_decision_id`。Deny（Breach）保持直接拒绝、不进收件箱；分身不存在时无归属者可挂起，维持拒绝 + `action.proxy_deferred` 审计兜底。
+- **批准必须重走 action 入口（硬红线）**：approve 时以所有者身份把存储载荷重新走 `validate_action` + `action::execute_validated_action`（与在线提交同一条校验与落盘路径），**禁止凭载荷绕过校验直接写事件**；校验不过置 `rejected` 终局并回显 violations（422）。裁决用条件状态迁移（仅 pending 可被认领），重复裁决 409、已自动驳回项再操作 410。
+- **72h 自动驳回**：`expired` 即自动驳回。惰性过期三落点——读收件箱（`GET /api/me/decisions`）、approve/reject 尝试、调度 tick sweep（与订单过期清理同位，不新造调度器）；每次置 expired 必写 `decision.expired` 审计。
+- **只批/驳**：收件箱接口与前端均不提供修改待决动作载荷的入口；载荷与裁决历史 append-only。所有者能改的是目标 / 代理策略 / 充值 / 退休申请等既有宪法口径，不含改一条已挂起的动作本身。
 
 ### 6. 核心接口约定
 
@@ -547,7 +556,7 @@ agent 行为模式 ──LLM 概念化──> ChangeProposal(targetLayer = L1 | 
 ### 10. 已知边界（生成代码时不得掩盖，须在注释 / 文档中如实标注）
 
 - LLM 上游未接：概念化执行者缺位，新概念不会自动生成，只能治理员手动提案。
-- L3 本体引擎未接、oxigraph 未引入。Durable Objects WebSocket 已接通（G8）：事件落盘后经单例 hub 广播，hub 无订阅鉴权。前端入口已落地（试运行 MVP：内嵌静态 SPA，分身卡优先、世界层需登录，地图为 SVG 非 MapLibre），见 docs/GAPS_AND_PLAN.md 第十二节。
+- L3 本体引擎未接、oxigraph 未引入。Durable Objects WebSocket 已接通（G8）：事件落盘后经单例 hub 广播，hub 无订阅鉴权。前端入口已落地（试运行 MVP：内嵌静态 SPA，分身卡优先、世界层需登录，地图为 SVG 非 MapLibre），见 docs/GAPS_AND_PLAN.md 第十二节。决策收件箱已落地（G15）：Defer 挂起待批 + 72h 自动驳回，契约类（marriage / major_contract / loan）仍只有库级分类、无 HTTP 入口，未经收件箱。
 - `core.ttl` 仍是草案未进构建；五域仍是实现基线（L2 seed 定位）。
 - 审批由 admin token 持有者执行，无独立治理身份。
 - 仅在 miniflare 本地态验证，未在真实 Cloudflare Paid 账号部署；D1 事务与 Queues 线上语义以真实环境为准。

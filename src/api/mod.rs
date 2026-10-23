@@ -4,6 +4,7 @@ pub mod action;
 pub mod admin;
 pub mod agent;
 pub mod auth;
+pub mod decisions;
 pub mod map;
 pub mod org;
 pub mod oauth;
