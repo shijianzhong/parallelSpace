@@ -58,6 +58,21 @@ pub async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/api/payment/confirm", |req, ctx| async move {
             api::into_router_result(api::payment::confirm(req, ctx).await)
         })
+        .post_async("/api/payment/transfer", |req, ctx| async move {
+            api::into_router_result(api::payment::transfer(req, ctx).await)
+        })
+        .post_async("/api/admin/payment/agent-earnings", |req, ctx| async move {
+            api::into_router_result(api::payment::agent_earnings(req, ctx).await)
+        })
+        .post_async("/api/admin/payment/redeem", |req, ctx| async move {
+            api::into_router_result(api::payment::redeem_request(req, ctx).await)
+        })
+        .post_async("/api/admin/payment/redeem/:id/settle", |req, ctx| async move {
+            api::into_router_result(api::payment::redeem_settle(req, ctx).await)
+        })
+        .post_async("/api/admin/payment/redeem/:id/reject", |req, ctx| async move {
+            api::into_router_result(api::payment::redeem_reject(req, ctx).await)
+        })
         // 治理管理：域注册表 + 两段式发布（提案 pending → 审批 active）+ 回滚
         .post_async("/api/admin/ontology/publish", |req, ctx| async move {
             api::into_router_result(api::admin::publish_ontology(req, ctx).await)

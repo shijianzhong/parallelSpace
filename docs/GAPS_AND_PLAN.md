@@ -86,3 +86,12 @@
 | 1（本轮） | F1 激活链路、F2 网关修复、F3 唤醒并集、F4 L0 扩容 | 无 |
 | 2 | G7 认证会话 → G4 死代码接线 → G5 PersonCard 落库 → G9 真沙箱 → G8 位置与地图几何/WS 路由 | G7 先行（其余接口的鉴权都依赖它） |
 | 3 | G11 真实部署、G12 LLM 上游（含概念化闭环）、G13 治理身份、G14 oxigraph 评估、前端 MapLibre | 需用户提供 Cloudflare 账号 / LLM provider 决策 |
+
+## 五、2026-10-23 定调变更：积分可转让 / 可兑换
+
+- **背景**：用户定调 agent 应在虚拟社会中经济自立，其社会收益应能回流到所属用户，故推翻原型期「积分不可兑回法币、不可账号间转让」的旧禁令（原 AGENTS 禁止事项与清单条目）。
+- **新规**（AGENTS §5.7 为准）：转让经 `transfer_credits`（条件扣减 + 成对流水 + 总量守恒）；agent 收益经 `agent_earnings` 结算入所属账号；兑换经 redeem 流程（申请冻结 → admin 审批 → 人工打款 settle / 驳回释放）；兑换价单点定义于 `packages.rs`，低于全部套餐单位买入价，杜绝套利回路。
+- **MVP 边界**：无用户认证（G7）前，转让 / 收益入账 / 兑换均为 admin token 代办接口；用户自助操作待 G7 上线。真实运营前需另行处理支付牌照、反洗钱 / KYC 与税务事项，代码兜底不替代合规。
+- **新增缺口（本日讨论产出，编号续排）**：G15 用户决策收件箱——出生设定（PersonCard）+ 重大不可逆事项审批，即 offline_proxy 的 DeferToOwner 落地（提案表 + 查询/审批接口）；G16 agent 经济闭环——Work/Trade 结算进 society money（agent_state/KV 热状态）、消费 sink、破产联动 dormant、收益自动结算到账号（本次已先落账本侧的 agent_earnings 入账函数）。两者排入 Phase 2 后段。
+
+- **已落地（同日）**：账本层三件套已实现并提交——`transfer_credits`（条件扣减 + 成对流水）、`credit_agent_earnings`（收益入账）、redeem 流程（migration 0003 + 申请冻结/审批 settle/驳回释放），接口均为 admin 代办；兑换价 1 积分 = 1 分（packages.rs 单点定义，单测钉住低于全部套餐单位买入价）。验收：单测 89 passed、smoke 67 通过 / 0 失败（新增第 12 节 10 项）。

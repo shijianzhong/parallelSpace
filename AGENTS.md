@@ -167,6 +167,18 @@ src/
 3. 下单接口 `POST /api/payment/order` 只接受 `package_id`：金额与积分由 `payment/packages.rs` 决定，客户端传 `amount_cents` 直接忽略。
 4. `MANUAL_WECHAT_QR_URL` 为空时下单接口直接 500（fail loud），禁止发出坏二维码。
 
+
+#### 5.7 积分转让与兑换（2026-10-23 定调：开放，但必须受控）
+
+产品定调（用户 2026-10-23 拍板，取代此前「不可兑回法币、不可账号间转让」的旧禁令）：**积分可转让、可兑换**。理由：agent 在虚拟社会中自营所得应能回流到其所属用户。
+
+- **三条资金路径，账本严格分开记 type**：购买入账 `purchase`（唯一增加 `total_purchased`）；账号间转让 `transfer_out` / `transfer_in`（成对出现、共享同一 event_id，总量守恒）；agent 社会收益入账 `agent_earnings`（agent 的 society money 结算到所属账号，不算购买）；兑换 `redeem_hold`（申请即冻结扣减）/ `redeem_release`（驳回释放）。
+- **转让**只能经 `payment::credit::transfer_credits`：先条件扣减（`balance >= amount` 才扣，影响行数判 1）再入账 + 双流水同一 batch，禁止直接改余额。当前无用户认证（G7），转让接口暂由 admin token 代办，用户自助转让待认证上线后开放。
+- **兑换**只能经 redeem 流程：申请 → 冻结 → 管理员审批 → 人工打款后 settle（MVP 沿用 manual 渠道哲学，不接自动支付通道）；驳回自动释放冻结。全程 append-only 流水 + 事件 + 审计，不允许账外打款。
+- **汇率单点定义**：兑换价在 `payment/packages.rs` 的 `REDEEM_CENTS_PER_CREDIT`，必须低于所有在售套餐的单位买入价（单测钉住），杜绝「买入再兑换」的套利回路；改汇率只改常量并同步本节。
+- **agent 收益的边界**：能兑换/转让的是已结算到账号的积分；society 内部的 money 转移仍走社会内账本（事件 + agent_state），不直接等同法币。收益结算引擎（G16）未落地前，收益入账由 admin 代办接口触发同一函数。
+- **合规提示（上线前必办，非代码事项）**：可转让 + 可兑换使积分具备资金属性，真实运营前需处理支付牌照、反洗钱/KYC、税务代扣等问题；代码层以 admin 审批、全量流水、无套利汇率三件套兜底，不能替代合规本身。
+
 ### 6. 核心接口约定
 
 #### 6.1 行动提交
@@ -354,7 +366,7 @@ agent 行为模式 ──LLM 概念化──> ChangeProposal(targetLayer = L1 | 
 - ❌ 信任客户端传入的金额（定价只认 payment/packages.rs）
 - ❌ KV 同类型存取混用 put(String) 与 .json() 读取（用 text() 配对，见 §5.5）
 - ❌ 引入 Neo4j 作为主存储或本体存储
-- ❌ 积分 / 社会货币兑回法币或账号间转让
+- ❌ 绕过 transfer_credits / redeem 流程直接改余额，或无审批、无流水地转让 / 兑换积分（转让与兑换本身已开放，见 §5.7）
 
 ### 8. 任务提示词模板
 
@@ -516,7 +528,7 @@ agent 行为模式 ──LLM 概念化──> ChangeProposal(targetLayer = L1 | 
 - [ ] KV 存取按 text() / json() 配对规则，没有混用
 - [ ] 构建三坑未复发：reference-types 双配合、main 指向 shim.mjs、版本对齐
 - [ ] 权威门禁全绿：cargo check / clippy / test（wasm32 target）+ scripts/smoke.sh
-- [ ] 积分 / 社会货币不可兑回法币、不可账号间转让
+- [ ] 积分转让 / 兑换只走 §5.7 的账本函数与审批流，无直接改余额、无账外操作
 - [ ] 没有引入 Neo4j 作为主存储，也没有假装 oxigraph / L3 / LLM 上游已接入
 - [ ] 附了单元测试覆盖边界
 

@@ -238,6 +238,29 @@ AG2=$(echo "$REG2" | get agent_id)
 chk "未付费分身激活 = 409" 409 "$(post_code "/api/agent/$AG2/activate" "$ACTP" -H "x-admin-token: $ADMIN_TOKEN")"
 rm -rf "$TTL_DIR3"
 
+
+echo "== 12. 积分转让 / 收益 / 兑换（AGENTS §5.7）"
+# ACC 当前余额 500（starter 已确认）。收款方用上面注册的第二账号 ACC2
+ACC2=$(echo "$REG2" | get account_id)
+chk "转让缺 token = 401" 401 "$(post_code /api/payment/transfer "{\"from_account_id\":\"$ACC\",\"to_account_id\":\"$ACC2\",\"amount\":200}")"
+TR=$(post /api/payment/transfer "{\"from_account_id\":\"$ACC\",\"to_account_id\":\"$ACC2\",\"amount\":200}" -H "x-admin-token: $ADMIN_TOKEN")
+chk "转让后出账余额 = 300" 300 "$(echo "$TR" | get fromBalance)"
+chk "转让后入账余额 = 200" 200 "$(echo "$TR" | get toBalance)"
+chk "余额不足转让 = 409" 409 "$(post_code /api/payment/transfer "{\"from_account_id\":\"$ACC\",\"to_account_id\":\"$ACC2\",\"amount\":99999}" -H "x-admin-token: $ADMIN_TOKEN")"
+chk "自转让 = 400" 400 "$(post_code /api/payment/transfer "{\"from_account_id\":\"$ACC\",\"to_account_id\":\"$ACC\",\"amount\":10}" -H "x-admin-token: $ADMIN_TOKEN")"
+ER=$(post /api/admin/payment/agent-earnings "{\"agent_id\":\"$AG\",\"credits\":150,\"source_ref\":\"smoke-gig-1\"}" -H "x-admin-token: $ADMIN_TOKEN")
+chk "agent 收益入账后余额 = 450" 450 "$(echo "$ER" | get newBalance)"
+RD=$(post /api/admin/payment/redeem "{\"account_id\":\"$ACC\",\"credits\":100}" -H "x-admin-token: $ADMIN_TOKEN")
+RDID=$(echo "$RD" | get requestId)
+chk "兑换金额 = 100 分（1 积分 = 1 分）" 100 "$(echo "$RD" | get amountCents)"
+chk "兑换申请冻结后余额 = 350" 350 "$(echo "$RD" | get newBalance)"
+STL=$(post "/api/admin/payment/redeem/$RDID/settle" "{\"payout_ref\":\"wxpay-smoke-1\"}" -H "x-admin-token: $ADMIN_TOKEN")
+chk "兑换结算 = paid" paid "$(echo "$STL" | get status)"
+RD2=$(post /api/admin/payment/redeem "{\"account_id\":\"$ACC\",\"credits\":50}" -H "x-admin-token: $ADMIN_TOKEN")
+RDID2=$(echo "$RD2" | get requestId)
+RJ=$(post "/api/admin/payment/redeem/$RDID2/reject" "{}" -H "x-admin-token: $ADMIN_TOKEN")
+chk "兑换驳回释放后余额 = 350" 350 "$(echo "$RJ" | get newBalance)"
+
 echo
 echo "结果：$pass 通过 / $fail 失败"
 [ "$fail" -eq 0 ]

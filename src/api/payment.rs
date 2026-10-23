@@ -188,3 +188,116 @@ pub async fn confirm(mut req: worker::Request, ctx: RouteContext<()>) -> AppResu
         "already_confirmed": result.already_confirmed,
     }))?)
 }
+
+// ---------- 转让 / 收益 / 兑换（AGENTS §5.7；当前无用户认证 G7，全部 admin 代办） ----------
+
+fn check_admin_headers(req: &worker::Request, ctx: &RouteContext<()>) -> AppResult<String> {
+    crate::api::admin::check_admin(req, ctx).map_err(|_| AppError::Unauthorized)?;
+    Ok("payment-admin".to_string())
+}
+
+fn json_ok(value: serde_json::Value) -> AppResult<Response> {
+    Ok(Response::from_json(&value)?)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TransferInput {
+    pub from_account_id: String,
+    pub to_account_id: String,
+    pub amount: i64,
+}
+
+/// 积分转让（admin 代办）：POST /api/payment/transfer。
+pub async fn transfer(mut req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    check_admin_headers(&req, &ctx)?;
+    let input: TransferInput = json_body(&mut req).await?;
+    let env = ctx.env.clone();
+    let r = credit::transfer_credits(&env, &input.from_account_id, &input.to_account_id, input.amount)
+        .await?;
+    json_ok(serde_json::json!({
+        "fromAccountId": input.from_account_id,
+        "toAccountId": input.to_account_id,
+        "amount": input.amount,
+        "fromBalance": r.from_balance,
+        "toBalance": r.to_balance,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AgentEarningsInput {
+    pub agent_id: String,
+    pub credits: i64,
+    pub source_ref: String,
+}
+
+/// agent 收益入账（admin 代办；G16 引擎落地后内部调用同一函数）：
+/// POST /api/admin/payment/agent-earnings。
+pub async fn agent_earnings(
+    mut req: worker::Request,
+    ctx: RouteContext<()>,
+) -> AppResult<Response> {
+    check_admin_headers(&req, &ctx)?;
+    let input: AgentEarningsInput = json_body(&mut req).await?;
+    let env = ctx.env.clone();
+    let new_balance = credit::credit_agent_earnings(&env, &input.agent_id, input.credits, &input.source_ref).await?;
+    json_ok(serde_json::json!({
+        "agentId": input.agent_id,
+        "credits": input.credits,
+        "newBalance": new_balance,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RedeemInput {
+    pub account_id: String,
+    pub credits: i64,
+}
+
+/// 发起兑换（admin 代办，申请即冻结）：POST /api/admin/payment/redeem。
+pub async fn redeem_request(mut req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    check_admin_headers(&req, &ctx)?;
+    let input: RedeemInput = json_body(&mut req).await?;
+    let env = ctx.env.clone();
+    let r = credit::request_redeem(&env, &input.account_id, input.credits).await?;
+    json_ok(serde_json::json!({
+        "requestId": r.request_id,
+        "accountId": r.account_id,
+        "credits": r.credits,
+        "amountCents": r.amount_cents,
+        "status": r.status,
+        "newBalance": r.new_balance,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RedeemSettleInput {
+    pub payout_ref: String,
+}
+
+/// 兑换结算（确认已人工打款）：POST /api/admin/payment/redeem/:id/settle。
+pub async fn redeem_settle(mut req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    let decided_by = check_admin_headers(&req, &ctx)?;
+    let id = ctx.param("id").map(|s| s.to_string()).unwrap_or_default();
+    let input: RedeemSettleInput = json_body(&mut req).await?;
+    let env = ctx.env.clone();
+    let r = credit::settle_redeem(&env, &id, &input.payout_ref, &decided_by).await?;
+    json_ok(serde_json::json!({
+        "requestId": r.request_id,
+        "status": r.status,
+        "amountCents": r.amount_cents,
+        "newBalance": r.new_balance,
+    }))
+}
+
+/// 兑换驳回（释放冻结）：POST /api/admin/payment/redeem/:id/reject。
+pub async fn redeem_reject(req: worker::Request, ctx: RouteContext<()>) -> AppResult<Response> {
+    let decided_by = check_admin_headers(&req, &ctx)?;
+    let id = ctx.param("id").map(|s| s.to_string()).unwrap_or_default();
+    let env = ctx.env.clone();
+    let r = credit::reject_redeem(&env, &id, &decided_by).await?;
+    json_ok(serde_json::json!({
+        "requestId": r.request_id,
+        "status": r.status,
+        "newBalance": r.new_balance,
+    }))
+}

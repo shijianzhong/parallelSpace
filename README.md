@@ -195,12 +195,12 @@ bash scripts/smoke.sh
 | 编译（dev） | `cargo check --target wasm32-unknown-unknown` | 0 error / 0 warning |
 | 编译（release） | `cargo build --release --target wasm32-unknown-unknown` | Finished |
 | Clippy（含测试目标） | `cargo clippy --target wasm32-unknown-unknown --all-targets` | 0 warning |
-| 单元测试 | `cargo test --target wasm32-unknown-unknown` | **87 passed / 0 failed** |
+| 单元测试 | `cargo test --target wasm32-unknown-unknown` | **89 passed / 0 failed** |
 | 迁移 SQL | `sqlite3 x.db < migrations/0001_init.sql` | 15 表，`foreign_key_check` / `integrity_check` ok |
 | 迁移 SQL（0002） | `wrangler d1 migrations apply <db> --local` | 域注册表 + versions 状态列 + 五域种子就位 |
 | Workers 打包 | `worker-build --release` | wasm + shim.mjs 产出成功 |
 | 本地运行时 | `wrangler dev --local` | 10 个绑定全部就绪，`/health` 200 |
-| 端到端冒烟 | `bash scripts/smoke.sh` | **57 通过 / 0 失败** |
+| 端到端冒烟 | `bash scripts/smoke.sh` | **67 通过 / 0 失败** |
 
 冒烟覆盖：注册 → 下单（服务端定价、忽略客户端金额、无账号 404）→ admin 令牌 401 →
 金额二次核对 409 → 入账 500 积分 → 幂等重放（余额不变）→ 同一流水号复用 409 →
@@ -251,8 +251,9 @@ SHACL 拒非法 status / 接受合法负载 → 查询 200/404 → 地图 Featur
   占位提案不再写缓存（防 7 天毒化）；配额改为真实预扣（`add_quota_used` 接入）
 - Cron tick（唤醒集合 = 本 tick 事件 actor ∪ active/idle 心跳）+ Queue 消费、KV 热状态/配额/缓存、R2 事件日志
 - 注册 / 查询 / 激活 / 行动 / 组织 / 地图 / 下单 / 支付确认 / 本体域注册 / 提案 / 审批 / 回滚 API
+- 积分转让 / agent 收益入账 / 兑换申请与审批（2026-10-23 定调：积分可转让、可兑换，admin 代办，规则见 AGENTS §5.7）
 - 错误响应统一 JSON `{"error":"<CODE>","message":"..."}`，5xx 不外泄内部细节
-- 49 个 Rust 文件、87 个单测、57 项端到端断言
+- 49 个 Rust 文件、89 个单测、67 项端到端断言
 - L0 中立宪法草案 `l0-constitution/core.ttl`（rdflib 实测：140 三元组、9 原语、零 imports、零人类模板泄漏）
 
 ---

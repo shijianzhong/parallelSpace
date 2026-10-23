@@ -33,6 +33,18 @@ pub const CREDIT_PACKAGES: &[CreditPackage] = &[
     },
 ];
 
+/// 兑换汇率：1 积分兑多少分（AGENTS §5.7）。
+///
+/// 必须低于所有在售套餐的单位买入价（最便宜的 pro 档约 1.43 分/积分），
+/// 杜绝「买入再兑换」的无风险套利回路；`redeem_rate_below_all_buy_prices`
+/// 单测钉住这条。改汇率只改这里，并同步 AGENTS §5.7。
+pub const REDEEM_CENTS_PER_CREDIT: i64 = 1;
+
+/// 按积分数算兑换金额（分）。
+pub fn redeem_amount_cents(credits: i64) -> i64 {
+    credits.saturating_mul(REDEEM_CENTS_PER_CREDIT)
+}
+
 /// 按 id 查套餐；未知 id 返回 None（调用方必须据此拒绝，不做模糊匹配）。
 pub fn find_package(id: &str) -> Option<&'static CreditPackage> {
     CREDIT_PACKAGES.iter().find(|p| p.id == id)
@@ -43,6 +55,21 @@ mod tests {
     use wasm_bindgen_test::wasm_bindgen_test;
 
     use super::*;
+
+    #[wasm_bindgen_test]
+    #[wasm_bindgen_test]
+    fn redeem_rate_below_all_buy_prices() {
+        // 任一套餐买到的积分，其兑换总价必须低于买入价，否则存在套利回路
+        for p in CREDIT_PACKAGES {
+            assert!(
+                redeem_amount_cents(p.credits) < p.amount_cents,
+                "package {} would allow buy-redeem arbitrage",
+                p.id
+            );
+        }
+        assert_eq!(redeem_amount_cents(100), 100);
+        assert_eq!(redeem_amount_cents(0), 0);
+    }
 
     #[wasm_bindgen_test]
     fn lookup_is_exact_match_only() {

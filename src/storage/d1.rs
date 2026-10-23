@@ -341,6 +341,211 @@ pub async fn apply_credit_purchase(
     Ok(account.balance)
 }
 
+#[derive(Debug, Deserialize)]
+pub struct RedeemRow {
+    pub id: String,
+    pub account_id: String,
+    pub credits: i64,
+    pub amount_cents: i64,
+    pub status: String,
+}
+
+/// 条件扣减积分余额（`balance >= amount` 才扣）。返回是否扣成功。
+///
+/// 转让 / 兑换冻结的第一步：先用这一条把余额占住，失败即中止后续入账，
+/// 避免「先入账后发现余额不足」的造币路径（与 mark_order_paid 同一模式）。
+pub async fn conditional_debit_credits(
+    db: &D1Database,
+    account_id: &str,
+    amount: i64,
+    now: &str,
+) -> AppResult<bool> {
+    let stmt = db
+        .prepare(
+            "UPDATE credit_accounts SET balance = balance - ?2, updated_at = ?3 \
+             WHERE account_id = ?1 AND balance >= ?2",
+        )
+        .bind(&[s(account_id), n(amount), s(now)])?;
+    let results = db.batch(vec![stmt]).await?;
+    let changed = results
+        .first()
+        .and_then(|r| r.meta().ok().flatten())
+        .and_then(|m| m.changes)
+        .unwrap_or(0);
+    Ok(changed == 1)
+}
+
+/// 余额上调（不计 total_purchased）：用于 agent 收益入账与兑换驳回释放。
+/// delta 必须为正（调用方保证）；写流水与改余额同一 batch。
+pub async fn apply_credit_adjustment(
+    db: &D1Database,
+    txn_id: &str,
+    account_id: &str,
+    delta: i64,
+    txn_type: &str,
+    event_id: &str,
+    now: &str,
+) -> AppResult<i64> {
+    db.batch(vec![
+        db.prepare(
+            "INSERT INTO credit_transactions (id, account_id, delta, type, order_id, event_id, created_at) \
+             VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)",
+        )
+        .bind(&[
+            s(txn_id),
+            s(account_id),
+            n(delta),
+            s(txn_type),
+            s(event_id),
+            s(now),
+        ])?,
+        db.prepare(
+            "INSERT INTO credit_accounts (account_id, balance, total_purchased, updated_at) \
+             VALUES (?1, ?2, 0, ?3) \
+             ON CONFLICT(account_id) DO UPDATE SET \
+               balance = balance + excluded.balance, \
+               updated_at = excluded.updated_at",
+        )
+        .bind(&[s(account_id), n(delta), s(now)])?,
+    ])
+    .await?;
+    let account = get_credit_account(db, account_id)
+        .await?
+        .ok_or_else(|| AppError::Db("credit account vanished after adjustment".into()))?;
+    Ok(account.balance)
+}
+
+/// 转让的入账侧：给收款方上调余额 + 成对流水（out/in 共享 event_id）同一 batch。
+/// 扣减侧已由 conditional_debit_credits 先行占住余额，本函数只做入账与记账。
+pub async fn apply_credit_transfer_in(
+    db: &D1Database,
+    out_txn_id: &str,
+    in_txn_id: &str,
+    from_account: &str,
+    to_account: &str,
+    amount: i64,
+    event_id: &str,
+    now: &str,
+) -> AppResult<(i64, i64)> {
+    db.batch(vec![
+        db.prepare(
+            "INSERT INTO credit_transactions (id, account_id, delta, type, order_id, event_id, created_at) \
+             VALUES (?1, ?2, ?3, 'transfer_out', NULL, ?4, ?5)",
+        )
+        .bind(&[
+            s(out_txn_id),
+            s(from_account),
+            n(-amount),
+            s(event_id),
+            s(now),
+        ])?,
+        db.prepare(
+            "INSERT INTO credit_transactions (id, account_id, delta, type, order_id, event_id, created_at) \
+             VALUES (?1, ?2, ?3, 'transfer_in', NULL, ?4, ?5)",
+        )
+        .bind(&[
+            s(in_txn_id),
+            s(to_account),
+            n(amount),
+            s(event_id),
+            s(now),
+        ])?,
+        db.prepare(
+            "INSERT INTO credit_accounts (account_id, balance, total_purchased, updated_at) \
+             VALUES (?1, ?2, 0, ?3) \
+             ON CONFLICT(account_id) DO UPDATE SET \
+               balance = balance + excluded.balance, \
+               updated_at = excluded.updated_at",
+        )
+        .bind(&[s(to_account), n(amount), s(now)])?,
+    ])
+    .await?;
+    let from = get_credit_account(db, from_account)
+        .await?
+        .ok_or_else(|| AppError::Db("from credit account vanished".into()))?;
+    let to = get_credit_account(db, to_account)
+        .await?
+        .ok_or_else(|| AppError::Db("to credit account vanished".into()))?;
+    Ok((from.balance, to.balance))
+}
+
+/// 建兑换申请行 + 冻结流水，同一 batch。余额已由 conditional_debit_credits 扣减（冻结）。
+pub async fn create_redeem_request(
+    db: &D1Database,
+    request_id: &str,
+    hold_txn_id: &str,
+    account_id: &str,
+    credits: i64,
+    amount_cents: i64,
+    event_id: &str,
+    now: &str,
+) -> AppResult<()> {
+    db.batch(vec![
+        db.prepare(
+            "INSERT INTO redeem_requests (id, account_id, credits, amount_cents, status, created_at) \
+             VALUES (?1, ?2, ?3, ?4, 'pending', ?5)",
+        )
+        .bind(&[
+            s(request_id),
+            s(account_id),
+            n(credits),
+            n(amount_cents),
+            s(now),
+        ])?,
+        db.prepare(
+            "INSERT INTO credit_transactions (id, account_id, delta, type, order_id, event_id, created_at) \
+             VALUES (?1, ?2, ?3, 'redeem_hold', ?4, ?5, ?6)",
+        )
+        .bind(&[
+            s(hold_txn_id),
+            s(account_id),
+            n(-credits),
+            s(request_id),
+            s(event_id),
+            s(now),
+        ])?,
+    ])
+    .await?;
+    Ok(())
+}
+
+pub async fn get_redeem_request(db: &D1Database, id: &str) -> AppResult<Option<RedeemRow>> {
+    let stmt = db
+        .prepare("SELECT id, account_id, credits, amount_cents, status FROM redeem_requests WHERE id = ?1")
+        .bind(&[s(id)])?;
+    Ok(stmt.first(None).await?)
+}
+
+/// 条件裁决兑换申请（仅 pending 可裁决）。返回是否命中（防重复 settle/并发双裁）。
+pub async fn decide_redeem_request(
+    db: &D1Database,
+    id: &str,
+    new_status: &str,
+    decided_by: &str,
+    payout_ref: Option<&str>,
+    now: &str,
+) -> AppResult<bool> {
+    let stmt = db
+        .prepare(
+            "UPDATE redeem_requests SET status = ?2, decided_by = ?3, decided_at = ?4, payout_ref = ?5 \
+             WHERE id = ?1 AND status = 'pending'",
+        )
+        .bind(&[
+            s(id),
+            s(new_status),
+            s(decided_by),
+            s(now),
+            payout_ref.map(JsValue::from_str).unwrap_or(JsValue::NULL),
+        ])?;
+    let results = db.batch(vec![stmt]).await?;
+    let changed = results
+        .first()
+        .and_then(|r| r.meta().ok().flatten())
+        .and_then(|m| m.changes)
+        .unwrap_or(0);
+    Ok(changed == 1)
+}
+
 /// 本 tick 需唤醒的 agent（并集去重，上限 500）：
 /// (a) 本 tick 有新事件的 actor（事件驱动）；
 /// (b) 状态为 active / idle 的分身（周期心跳）——没有 (b)，世界在无用户行动时
